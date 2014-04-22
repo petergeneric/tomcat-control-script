@@ -1,0 +1,49 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          tomcat
+# Required-Start:    $remote_fs $syslog
+# Required-Stop:     $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Apache Tomcat Launcher
+# Description:       Launches tomcat
+### END INIT INFO
+
+TOMCAT_DIR="/opt/tomcat"
+#TOMCAT_USER="tomcat"
+
+
+# Do NOT "set -e"
+
+# PATH should only include /usr/* if it runs after the mountnfs.sh script
+PATH=/sbin:/usr/sbin:/bin:/usr/bin
+
+if [ -n "$TOMCAT_USER" ] ; then
+	SPAWN="exec sudo -u $TOMCAT_USER"
+else
+	SPAWN=exec
+fi
+
+case "$1" in
+  debug)
+	${SPAWN} "$TOMCAT_DIR/bin/debug.sh"
+	;;
+  start|restart|force-reload)
+	${SPAWN} "$TOMCAT_DIR/bin/start.sh"
+	;;
+  stop)
+	${SPAWN} "$TOMCAT_DIR/bin/stop.sh"
+	;;
+  kill)
+	${SPAWN} "$TOMCAT_DIR/bin/kill.sh"
+	;;
+  status)
+	${SPAWN} "$TOMCAT_DIR/bin/status.sh"
+       ;;
+  *)
+	echo "Usage: $SCRIPTNAME {debug|start|stop|kill|status|restart|force-reload}" >&2
+	exit 3
+	;;
+esac
+
+:

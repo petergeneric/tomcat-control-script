@@ -292,7 +292,7 @@ getJavaHome() {
 	fi
 
 	# Fall back to searching for a JVM
-	for J_HOME in "$JAVA_HOME" "/opt/java" "/usr" "/System/Library/Frameworks/JavaVM.framework/Versions/CurrentJDK/Home"
+	for J_HOME in "/opt/java" "$(/usr/libexec/java_home 2>/dev/null)" "/usr" "$JAVA_HOME"
 	do
 		if is_valid_java_home "$J_HOME" ; then
 			echo "$J_HOME" > "$CATALINA_HOME/.java_home" 2>/dev/null

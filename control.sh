@@ -32,24 +32,25 @@ control_main() {
 		exit 0
 	fi
 
-	local CATALINA_HOME="$(getCatalinaHome)"
-	local CATALINA_PID="$CATALINA_HOME/.pid"
-	local JAVA_HOME="$(getJavaHome)"
 	local TOMCAT_USER="$(getTomcatUser)"
-	
-	if [ -z "$JAVA_HOME" ] ; then
-		echo "Could not find Java!" >&2
-		exit 5
-	fi
 
 	# Take this opportunity to fix permissions (if possible)
 	resetPermissions
 
 	# Become the tomcat user if not already
 	if [ "$(id -un)" != "$TOMCAT_USER" ] ; then
-		exec sudo -u $TOMCAT_USER "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}"
+		exec sudo -u $TOMCAT_USER env JAVA_HOME="$JAVA_HOME" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}"
 	fi
-	
+
+        local CATALINA_HOME="$(getCatalinaHome)"
+        local CATALINA_PID="$CATALINA_HOME/.pid"
+        local JAVA_HOME="$(getJavaHome)"
+
+        if [ -z "$JAVA_HOME" ] ; then
+                echo "Could not find Java!" >&2
+                exit 5
+        fi
+
 	# The control script allows the actual action to be specified as an argument
 	if [ "$ACTION" = "control.sh" ] ; then
 		control_main $(dirname "$1")/"${2}.sh" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}"
@@ -134,7 +135,7 @@ EOF
 				TOMCAT_SCRIPT=.inner_debug.sh
 
 				killTomcat
-				
+
 				local JAVA_OPTS="$(getJavaOpts)"
 			;;
 		"start.sh")
@@ -142,7 +143,7 @@ EOF
 
 				# Ensure tomcat's not running before we start it
 				killTomcat
-				
+
 				local JAVA_OPTS="$(getJavaOpts)"
 			;;
 		"stop.sh")
@@ -202,7 +203,7 @@ EOF
 
 isGNUStat() {
 	# Ugly workaround: GNU stat supports --help, BSD stat does not
-	
+
 	stat --help 2>/dev/null >/dev/null
 	if [ "$?" = "0" ] ; then
 		echo 1
@@ -214,7 +215,7 @@ isGNUStat() {
 # Prints the owner of a given file/directory
 getOwner() {
 	isgnu=$(isGNUStat)
-	
+
 	if [ "$isgnu" = "1" ] ; then
 		stat -c%U "$1"
 	else
@@ -226,7 +227,7 @@ getOwner() {
 # Prints the modify date of a given file/directory
 getModify() {
 	isgnu=$(isGNUStat)
-	
+
 	if [ "$isgnu" = "1" ] ; then
 		stat -c%Y "$1"
 	else
@@ -249,7 +250,7 @@ getCatalinaHome() {
 getJavaOpts() {
 	local CATALINA_HOME="$(getCatalinaHome)"
 	local CONFIG_FILE="${CATALINA_HOME}/conf/tomcat.conf"
-	
+
 	if [ -e "$CONFIG_FILE" ] ; then
 		readConfigValues "$CONFIG_FILE" "opts.*"
 	fi
@@ -278,11 +279,11 @@ is_valid_java_home() {
 getJavaHome() {
 	local CATALINA_HOME="$(getCatalinaHome)"
 	local J_HOME=""
-	
+
 	# If possible, use the JVM path stored in tomcat/.java_home
 	if [ -e "$CATALINA_HOME/.java_home" ] ; then
 		J_HOME=$(cat "$CATALINA_HOME/.java_home")
-		
+
 		if is_valid_java_home "$J_HOME" ; then
 			echo "$J_HOME"
 			return
@@ -306,7 +307,7 @@ getJavaHome() {
 	exit 5
 }
 
-# Sets the appropriate permissions 
+# Sets the appropriate permissions
 resetPermissions() {
 	# If we're root take the opportunity to ensure everything's owned by the tomcat user
 	if [ $(id -u) = "0" ] ; then
@@ -315,15 +316,15 @@ resetPermissions() {
 }
 
 # Removes the PID file if it's of the wrong date (or if the process isn't running anymore)
-processPidFile() {	
+processPidFile() {
 	if [ -e "$CATALINA_PID" ] ; then
 		# If the process isn't running, remove the PID file
 		ps $(cat "$CATALINA_PID") >/dev/null 2>/dev/null
-		
+
 		if [ "$?" = "1" ] ; then
 			$PP rm -f "$CATALINA_PID"
 		fi
-		
+
 		if [ -e "$CATALINA_PID" ] ; then
 			local PID_MODIFY="$(getModify "$CATALINA_PID")"
 			local BOOT_TIME="$(getBootTime)"

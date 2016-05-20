@@ -1,0 +1,417 @@
+#!/bin/sh
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+# The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+###############################################################################
+# Start common functions
+###############################################################################
+
+function die_with() {
+	echo "$*" >&2
+	exit 1
+}
+
+function warn() {
+	echo "$*" >&2
+}
+
+function die_with_usage() {
+	echo "$*" >&2
+	
+	print_usage
+	
+	exit 1
+}
+
+function die_unless_tomcat() {
+	if [ "$(whoami)" != "$CATALINA_USER" ] ; then
+		echo "Operation requires that we be tomcat user but you are not tomcat user: $*"
+		exit 1
+	fi
+}
+
+# Set the launcher root
+LAUNCHER_ROOT=$(cd "$(dirname "$0")" ; cd .. ; pwd)
+DIST_FOLDER="$LAUNCHER_ROOT/distribution"
+
+if [ ! -e "$LAUNCHER_ROOT/conf/user" ] ; then
+	die_with "No user configured in $LAUNCHER_ROOT/conf/user"
+elif [ ! -e "$LAUNCHER_ROOT/conf/java" ] ; then
+	die_with "No JVM configured in $LAUNCHER_ROOT/conf/java"
+fi
+
+export CATALINA_USER=$(cat "$LAUNCHER_ROOT/conf/user")
+export JAVA_HOME=$(cat "$LAUNCHER_ROOT/conf/java")
+
+if [ "$(whoami)" != "$CATALINA_USER" ] ; then
+	# Allow sudo to be disabled for non-root users
+	if [ "$(whoami)" != "root" ] ; then
+		if [ -e "$LAUNCHER_ROOT/conf/allow-sudo" ] ; then
+			case "$(cat "$LAUNCHER_ROOT/conf/allow-sudo")" in
+				yes|true|1)
+					# Switch to the tomcat user
+					exec sudo -u "$CATALINA_USER" "$0" "$@"
+				;;
+				no|false|0)
+					# Don't switch to the tomcat user. Some commands may fail.
+				;;
+				*)
+					die_with "Unknown value in conf/allow-sudo: $(cat "$LAUNCHER_ROOT/conf/allow-sudo")"
+				;;
+			esac
+		fi
+	else
+		# We are root, switch to the tomcat user
+		exec sudo -u "$CATALINA_USER" "$0" "$@"
+	fi
+fi
+
+###############################################################################
+# End common functions
+###############################################################################
+
+function print_usage() {
+	echo "Multi-domain tomcat management scripts"
+	echo "Copyright (c) 2014-present Peter Wright"
+	echo ""
+
+	echo "Usage: "
+	echo ""
+	echo "CREATING A NEW DOMAIN"
+	echo "	$0 create <domainName> --port <portNumber> --shutdown-port <portNumber>"
+	echo "		This creates a new domain, setting the HTTP port to the specified value. Will fail if a domain with this name already exists."
+	echo ""
+	echo "ADDING RESOURCES TO A DOMAIN"
+	echo "	$0 add-database <domainName>"
+	echo "		This displays instructions on how to add a database connection to the specified domain"
+	echo ""
+	echo "UPGRADING TOMCAT VERSION"
+	echo "	$0 upgrade"
+	echo "		This upgrades the tomcat .sh and .jar files used in the shared/ folder to the version in the distribution folder. Does not modify domain tomcat conf/ folders."
+	echo ""
+	echo "CONTROLLING A DOMAIN"
+	echo ""
+	echo "	$0 start [<domainName>[,<domainName2>...]]"
+	echo "		This starts the domain (killing any previously-running instance)."
+	echo ""
+	echo "	$0 status [<domainName>[,<domainName2>...]]"
+	echo "		This displays whether the domain is running"
+	echo ""
+	echo "	$0 stop [<domainName>[,<domainName2>...]]"
+	echo "		This requests the domain shut down cleanly"
+	echo ""
+	echo "	$0 restart [<domainName>[,<domainName2>...]]"
+	echo "		This restarts the domain (stop and then start)"
+	echo ""
+	echo "	$0 kill [<domainName>[,<domainName2>...]]"
+	echo "		This kills any running instance for this domain"
+	echo ""
+	echo "	$0 log [<domainName>[,<domainName2>...]]"
+	echo "		This executes tail -f on the catalina.out files for each of the listed domains in parallel"
+	echo ""
+	echo "Full list of supported domain commands, run domain --help"
+	echo ""
+	echo "Anywhere <domainName> appears, the following special values are permitted:"
+	echo "	all      apply the operation to each domain sequentially (default if no domain name is specified)"
+	echo "	running  all domains that are running"
+	echo "	stopped  all domains that are not running"
+}
+
+# Make sure there's a shared folder
+if [ ! -e "$LAUNCHER_ROOT/shared" ] ; then
+
+	die_unless_tomcat "create shared/ tomcat folder (needed because it does not exist)"
+	
+	if [ ! -e "$LAUNCHER_ROOT/distribution" ] ; then
+		echo "No distribution folder found in $LAUNCHER_ROOT - please download tomcat >= 8.0 and unpack to ${LAUNCHER_ROOT}/distribution and add a VERSION.txt describing the version" >&2
+		
+		exit 100
+	fi
+	
+	mkdir $LAUNCHER_ROOT/shared || die_with "Failed to create shared folder!"
+	mkdir $LAUNCHER_ROOT/shared/lib || die_with "Failed to create shared/lib folder!"
+	mkdir $LAUNCHER_ROOT/shared/bin || die_with "Failed to create shared/bin folder!"
+	mkdir $LAUNCHER_ROOT/shared/endorsed
+	
+	# Now that we've created the folder structure, treat the remainder of the operation like an upgrade
+	domains_shared_upgrade
+fi
+
+function domains_shared_upgrade() {
+	die_unless_tomcat "update shared/ folder"
+
+	if [ ! -e "$LAUNCHER_ROOT/distribution" ] ; then
+		echo "No distribution folder found in $LAUNCHER_ROOT - please download tomcat >= 8.0 and unpack to ${LAUNCHER_ROOT}/distribution and add a VERSION.txt describing the version" >&2
+		
+		exit 100
+	fi
+
+	# Validate that the folders we expect to see are present	
+	for f in $LAUNCHER_ROOT/shared/ $LAUNCHER_ROOT/shared/lib/ $LAUNCHER_ROOT/shared/bin/ $DIST_FOLDER/bin $DIST_FOLDER/lib $DIST_FOLDER/VERSION.txt
+	do
+		if [ ! -e "$f" ] ; then
+			die_with "Expected file/folder '${f}' does not exist, cannot upgrade it!"
+		fi
+	done
+	
+	echo "distribution/VERSION.txt    $(cat $DIST_FOLDER/VERSION.txt)"
+	if [ -e $LAUNCHER_ROOT/shared/VERSION.txt ] ; then
+		echo "      shared/VERSION.txt    $(cat $LAUNCHER_ROOT/shared/VERSION.txt)"
+	fi
+	
+
+	if [ -e $LAUNCHER_ROOT/shared/bin/setenv.sh ] ; then
+		if [ ! -e $LAUNCHER_ROOT/setenv.sh ] ; then
+			cp $LAUNCHER_ROOT/shared/bin/setenv.sh $LAUNCHER_ROOT/
+		fi
+	fi
+
+	rm -rf $LAUNCHER_ROOT/shared/bin
+	rm $LAUNCHER_ROOT/shared/lib/*.jar
+	
+	ln -s $DIST_FOLDER/bin $LAUNCHER_ROOT/shared/bin || die_with "Failed to symlink bin folder!"
+	ln -s $DIST_FOLDER/lib/* $LAUNCHER_ROOT/shared/lib/ || die_with "Failed to symlink lib folder contents!"
+	cp $DIST_FOLDER/VERSION.txt $LAUNCHER_ROOT/shared/VERSION.txt || die_with "Failed to copy distribution VERSION.txt"
+	if [ -e "$LAUNCHER_ROOT/setenv.sh" ] ; then
+		ln -s "$LAUNCHER_ROOT/setenv.sh" "$LAUNCHER_ROOT/shared/bin/setenv.sh"
+	fi
+}
+
+function domain_create() {
+
+	# Must be the tomcat user
+	die_unless_tomcat "create domain"
+	
+	# Parse command-line options
+	while [[ $# != 0 ]]
+	do
+		key="$1"
+		shift
+
+		case $key in
+			-n|--name)
+				DOMAIN_NAME="$1"
+				shift
+			
+				case $DOMAIN_NAME in
+					distribution|shared|bin|lib|endorsed|conf|logs|temp|work|all)
+						die_with "Illegal domain name: $DOMAIN_NAME is reserved"
+						;;
+					*)
+						# Looks OK, check that it doesn't conflict with 
+						;;
+				esac
+			;;
+			-p|--port)
+				DOMAIN_PORT="$1"
+				shift
+			;;
+			-s|--shutdown-port)
+				SHUTDOWN_PORT="$1"
+				shift
+			;;
+			*)
+				# unknown option
+				die_with_usage "Unknown option: $key"
+			;;
+		esac
+	done
+
+	if [ -z "$DOMAIN_NAME" ] ; then
+		die_with_usage "Must supply domain name!"
+	elif [ -z "$DOMAIN_PORT" ] ; then
+		die_with_usage "Must supply domain port!"
+	elif [ -z "$SHUTDOWN_PORT" ] ; then
+		die_with_usage "Must supply shutdown port!"
+	fi
+
+	DOMAIN_FOLDER=$LAUNCHER_ROOT/$DOMAIN_NAME
+
+	mkdir $DOMAIN_FOLDER || die_with "Failed to create domain folder: $DOMAIN_FOLDER"
+	cp -r $DIST_FOLDER/lib $DOMAIN_FOLDER/lib
+	cp -r $DIST_FOLDER/conf $DOMAIN_FOLDER/conf
+	
+	mkdir $DOMAIN_FOLDER/bin
+	mkdir $DOMAIN_FOLDER/webapps
+	mkdir $DOMAIN_FOLDER/temp
+	mkdir $DOMAIN_FOLDER/work
+	
+	if [ -w /var/log/tomcat ] ; then
+		if [ -e "/var/log/tomcat/${DOMAIN_NAME}" ] ; then
+			echo "Creating folder for logs: /var/log/tomcat/${DOMAIN_NAME}"
+			mkdir "/var/log/tomcat/${DOMAIN_NAME}"
+		fi
+		
+		ln -s "/var/log/tomcat/${DOMAIN_NAME}" $DOMAIN_FOLDER/logs
+	else
+		echo "/var/log/tomcat is not writable by user $(whoami), logs will be placed in $DOMAIN_FOLDER/logs"
+		mkdir $DOMAIN_FOLDER/logs
+	fi
+
+	# Add a special file to indicate this is a tomcat domain
+cat >$DOMAIN_FOLDER/DOMAIN.txt <<EOF
+This is a tomcat domain managed by external scripts. You should not attempt to use this tomcat install directly.
+Please refer to the documentation in the parent directory.
+EOF
+
+	# Set up the shutdown port and command
+	perl -pi -e 's|port=".*?" shutdown=".*?"|port="${SHUTDOWN_PORT}" shutdown="SHUTDOWN$(uuidgen)"|' $DOMAIN_FOLDER/conf/server.xml
+
+	# Remove the AJP connector
+	perl -pi -e 's|<Connector port=".*?" protocol="AJP/1.3" redirectPort="8443" />||' $DOMAIN_FOLDER/conf/server.xml
+
+	# Change the HTTP port
+	perl -pi -e "s|Connector port=\"8080\" |Connector port=\"${DOMAIN_PORT}\" |" $DOMAIN_FOLDER/conf/server.xml
+}
+
+# Takes a comma- or space-separated list of aliases, emits a whitespace-separated list of domains (or dies with an error if invalid names were specified)
+# The order in which domain names are echoed by this function is undefined, the caller should always sort (and bear in mind that this function may emit duplicates)
+function resolve_aliases_raw() {
+	local DOMAIN_NAME=""
+	
+	for DOMAIN_NAME in $(echo "$@" | cut -d',' --output-delimiter ' ' -f1- | paste -s -d' ')
+	do
+		case $DOMAIN_NAME in
+		all)
+			# Emit all domains
+			runcmd list
+		;;
+		none)
+			# Don't print anything
+		;;
+		online|running|started)
+			for DOMAIN_NAME in $(runcmd list)
+			do
+				local DOMAIN_PID=$($LAUNCHER_ROOT/bin/domain -n "$DOMAIN_NAME" -c pid)
+				
+				if [ "$DOMAIN_PID" != "-1" ] ; then
+					echo $DOMAIN_NAME
+				fi
+			done
+		;;
+		offline|stopped)
+			for DOMAIN_NAME in $(runcmd list)
+			do
+				local DOMAIN_PID=$($LAUNCHER_ROOT/bin/domain -n "$DOMAIN_NAME" -c pid)
+				
+				if [ "$DOMAIN_PID" = "-1" ] ; then
+					echo $DOMAIN_NAME
+				fi
+			done
+		;;
+		*)
+			# Check that this is really a domain
+			# If it's not then it might be a user-defined alias
+			if [ -e "${LAUNCHER_ROOT}/${DOMAIN_NAME}/DOMAIN.txt" ] ; then
+				echo "$DOMAIN_NAME"
+			elif [ -f "${LAUNCHER_ROOT}/conf/alias/${DOMAIN_NAME}" ] ; then
+				resolve_aliases_raw "$(cat "${LAUNCHER_ROOT}/conf/alias/${DOMAIN_NAME}")"
+			else
+				echo "Not a domain name or valid alias: $DOMAIN_NAME" >&2
+				exit 2
+			fi
+		;;
+		esac
+	done
+}
+
+function resolve_aliases() {
+	resolve_aliases_raw "$@" | sort | uniq
+}
+
+function domain_action() {
+	action="$1"
+	shift
+	
+	# Ignore if no domain name is supplied
+	if [ -n "$1" ]  ; then
+		# Ignore domain name if the first arg starts with - (it's probably "domains log -n 1024" or equivalent)
+		if [ "${1:0:1}" != "-" ] ; then
+			DOMAIN_NAMES="$1"
+			shift
+		fi
+	fi
+	
+	# If no domain name was specified then we should default to "all"
+	if [ -z "$DOMAIN_NAMES" ] ; then
+		DOMAIN_NAMES="all"
+	fi
+	
+	case "$action" in
+		log|tclog)
+			cd $LAUNCHER_ROOT
+			
+			# Special-case: tail multiple log files simultaneously
+			LOG_FILES="$(resolve_aliases "$DOMAIN_NAMES" | perl -pe 's|\n|,|g' | perl -pe 's|,|/logs/catalina.out |g')"
+			
+			if [ -n "$LOG_FILES" ] ; then
+				exec tail -f $LOG_FILES "$@"
+			else
+				die_with "No domains matched, no logs to tail"
+			fi
+
+			;;
+		*)
+			for DOMAIN_NAME in $(resolve_aliases "$DOMAIN_NAMES")
+			do
+				printf "$action $DOMAIN_NAME: "
+				$LAUNCHER_ROOT/bin/domain -n "$DOMAIN_NAME" -c "$action" "$@"
+			done
+
+			;;
+	esac
+}
+
+
+function runcmd() {
+	command="$1"
+	shift
+	
+	case "$command" in
+		--help)
+			print_usage
+			exit 0
+		;;
+		'')
+			die_with_usage "Expected: command"
+			exit 1
+		;;
+		upgrade)
+			domains_shared_upgrade
+			exit 0
+		;;
+		add|create)
+			DOMAIN_NAME="$1"
+			shift
+		
+			domain_create -n "$DOMAIN_NAME" "$@"
+		;;
+		startlog)
+			domain_action "start" "$@"
+			domain_action "log" "$@"
+		;;
+		list)
+			if [ -z "$1" ] ; then
+				for f in $LAUNCHER_ROOT/*
+				do
+					if [ -d "$f" ] ; then
+						if [ -e "${f}/DOMAIN.txt" ] ; then
+							echo $(basename "$f")
+						fi
+					fi
+				done
+			else
+				# Print all the matching domains
+				resolve_aliases "$1"
+			fi
+		;;
+		*)
+			# Assume the comamnd 
+			domain_action "$command" "$@"
+		;;
+	esac
+}
+
+runcmd "$@"

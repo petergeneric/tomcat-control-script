@@ -1,0 +1,485 @@
+#!/bin/sh
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+# The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+###############################################################################
+# Start common functions
+###############################################################################
+
+function die_with() {
+	echo "$*" >&2
+	exit 1
+}
+
+function warn() {
+	echo "$*" >&2
+}
+
+function die_with_usage() {
+	echo "$*" >&2
+	
+	print_usage
+	
+	exit 1
+}
+
+function die_unless_tomcat() {
+	if [ "$(whoami)" != "$CATALINA_USER" ] ; then
+		echo "Operation requires that we be tomcat user but you are not tomcat user: $*"
+		exit 1
+	fi
+}
+
+# Set the launcher root
+LAUNCHER_ROOT=$(cd "$(dirname "$0")" ; cd .. ; pwd)
+DIST_FOLDER="$LAUNCHER_ROOT/distribution"
+
+if [ ! -e "$LAUNCHER_ROOT/conf/user" ] ; then
+	die_with "No user configured in $LAUNCHER_ROOT/conf/user"
+elif [ ! -e "$LAUNCHER_ROOT/conf/java" ] ; then
+	die_with "No JVM configured in $LAUNCHER_ROOT/conf/java"
+fi
+
+export CATALINA_USER=$(cat "$LAUNCHER_ROOT/conf/user")
+export JAVA_HOME=$(cat "$LAUNCHER_ROOT/conf/java")
+
+if [ "$(whoami)" != "$CATALINA_USER" ] ; then
+	# Allow sudo to be disabled for non-root users
+	if [ "$(whoami)" != "root" ] ; then
+		if [ -e "$LAUNCHER_ROOT/conf/allow-sudo" ] ; then
+			case "$(cat "$LAUNCHER_ROOT/conf/allow-sudo")" in
+				yes|true|1)
+					# Switch to the tomcat user
+					exec sudo -u "$CATALINA_USER" "$0" "$@"
+				;;
+				no|false|0)
+					# Don't switch to the tomcat user. Some commands may fail.
+				;;
+				*)
+					die_with "Unknown value in conf/allow-sudo: $(cat "$LAUNCHER_ROOT/conf/allow-sudo")"
+				;;
+			esac
+		fi
+	else
+		# We are root, switch to the tomcat user
+		exec sudo -u "$CATALINA_USER" "$0" "$@"
+	fi
+fi
+
+###############################################################################
+# End common functions
+###############################################################################
+
+function print_usage() {
+	echo "Multi-domain tomcat management scripts"
+	echo "Copyright (c) 2014-present Peter Wright"
+	echo ""
+	
+	echo "Usage: "
+	echo "	$0 --name <domainName> --command <command>"
+	echo ""
+	echo "The following commands are supported:"
+	echo "	start          start the domain (killing it if it's already running)"
+	echo "	try-stop       request that the domain stop but do not track or terminate it"
+	echo "	stop           request the domain stop, and kill if it it doesn't stop"
+	echo "	stop-wait      request the domain stop, and wait for up to 5 minutes for it to do so"
+	echo "	kill           kill the domain with SIGKILL if it is running"
+	echo "	restart        stop-wait then start"
+	echo "	debug          start with debugging enabled"
+	echo "	jpda           start with JPDA debugging enabled"
+	echo "	tclog          tail -f the domain's catalina.out"
+	echo "	delete         kill and delete the domain"
+	echo "	pid            print the PID of the domain if running, otherwise -1 if not running"
+	echo "	status         print whether the domain is running"
+	echo "	add-database   display instructions on adding a database to this domain"
+	echo "	stacktrace     request that the JVM emit a stack trace to the log file"
+	echo "  heap           request that jmap display the java heap summary"
+	echo "  histo          request that jmap display a histogram of the java object heap"
+	echo "  histo:live     request that jmap display a histogram of the live java object heap"
+	echo "  dump:*         pass a custom jmap dump: command (e.g. dump:live,format=b,file=heap.bin)"
+	echo ""
+	echo "Stale webapps (where the .war is newer than the folder) are handled automatically at start time,"
+	echo "however the following commands allow them to be dealt with at runtime:"
+	echo "	list-stale-webapps      produce a listing of stale webapps"
+	echo "	stat-stale-webapps      produce a listing of stale webapps, including their last modified times"
+	echo "	redeploy-stale-webapps  request the redeployment of stale webapps"
+}
+
+if [ -z "$1" ] ; then
+	die_with_usage "Expected: domain and command to execute"
+elif [ "$1" = "--help" ] ; then
+	print_usage
+	exit 0
+fi
+
+# Parse command-line options
+while [[ $# != 0 ]]
+do
+	key="$1"
+	shift
+
+	case $key in
+		-n|--name)
+			DOMAIN_NAME="$1"
+			shift
+		;;
+		-c|--command)
+			DOMAIN_COMMAND="$1"
+			shift
+		;;
+		*)
+			# unknown option
+			die_with_usage "Unknown option: $key"
+		;;
+	esac
+done
+
+if [ -z "$DOMAIN_NAME" ] ; then
+	die_with_usage "Must supply domain name!"
+fi
+
+export DOMAIN_FOLDER=$LAUNCHER_ROOT/$DOMAIN_NAME
+export CATALINA_HOME=$LAUNCHER_ROOT/shared
+export CATALINA_BASE=$DOMAIN_FOLDER
+export CATALINA_PID=$DOMAIN_FOLDER/.pid
+
+get_pid() {
+	if [ -e "$CATALINA_PID" ] ; then
+		which pgrep 2>/dev/null >/dev/null
+		
+		if [ "$?" = "0" ] ; then
+			# Make sure we only return Java processes owned by the tomcat user
+			PGREP_RESULT=$(pgrep -F $CATALINA_PID java -u $CATALINA_USER)
+			
+			if [ "$?" = "0" ] ; then
+				which pwdx 2>/dev/null >/dev/null
+				
+				# If pwds is available and we are the tomcat user...
+				if [ "$?" = "0" ] && [ "$(whoami)" = "$CATALINA_USER" ] ; then
+					#  pwdx is present, check that the working directory of the process is what we expect
+					pwdx "$PGREP_RESULT" | grep "$DOMAIN_FOLDER" >/dev/null 2>/dev/null
+					
+					if [ "$?" = "0" ] ; then
+						# pwdx gave the working directory we expected, this process id looks like it's right
+						echo "$PGREP_RESULT"
+					else
+						# pwdx gave a different working directory than we expected
+						echo "-1"
+					fi
+				else
+					# No pwdx, should we fall back on checking where /proc/<pid>/cwd points to (assuming it exists)?
+					echo "$PGREP_RESULT"
+				fi
+			else
+				# pgrep returned no results
+				echo "-1"
+			fi
+		else
+			# Just cat the PID file
+			cat $CATALINA_PID
+		fi
+	else
+		echo "-1"
+	fi
+}
+
+function runcmd() {
+	local COMMAND=$1
+	
+	if [ ! -e "$DOMAIN_FOLDER" ] ; then
+		die_with "No such domain: $DOMAIN_NAME"
+	fi
+
+	cd $DOMAIN_FOLDER
+
+	
+	case $COMMAND in
+		tclog)
+	
+			# Tail the logs
+			exec tail -f $DOMAIN_FOLDER/logs/catalina.out
+		;;
+		delete)
+		
+			die_unless_tomcat "$COMMAND"
+			
+			# Make sure the domain is not running
+			runcmd kill || die_with "kill operation failed, domain may still have a process running!"				
+		
+			cd $LAUNCHER_ROOT
+			rm -rf $DOMAIN_FOLDER || die_with "Failed to remove domain folder!"
+			
+			echo "Domain deleted."
+			
+			return 0
+		;;
+		status)
+	
+			PID_VALUE=$(get_pid)
+
+			if [ "$PID_VALUE" = "-1" ] ; then
+				echo "Domain is not running" >&2
+				return 1
+			else
+				echo "Domain is running (PID ${PID_VALUE})"
+				return 0
+			fi
+		
+		;;
+		pid)
+	
+			PID_VALUE=$(get_pid)
+
+			echo "$PID_VALUE"
+		
+			if [ "$PID_VALUE" = "-1" ] ; then
+				return 10
+			else
+				return 0
+			fi
+		
+		;;
+		kill)
+		
+			die_unless_tomcat "$COMMAND"
+	
+			PID_VALUE=$(get_pid)
+		
+			if [ "$PID_VALUE" = "-1" ] ; then
+				echo "Domain is not running" >&2
+				return 0
+			else
+				kill -9 "$PID_VALUE"
+			fi
+			
+		;;
+		start|debug|jpda)
+	
+			die_unless_tomcat "$COMMAND"
+			
+			# Kill the process if it's already running
+			PID_VALUE=$(get_pid)
+		
+			if [ "$PID_VALUE" != "-1" ] ; then
+				kill -9 "$PID_VALUE"
+			fi
+		
+			# Find all webapps with unpacked folders older than their .war files and delete the unpacked folders to force a redeploy
+			runcmd redeploy-stale-webapps || die_with "Failed to prep stale webapps for redeploy"
+
+			exec ${CATALINA_HOME}/bin/catalina.sh $COMMAND || die_with "Startup failed"
+
+		;;
+		try-stop)
+	
+			die_unless_tomcat "$COMMAND"
+			
+			echo "Requesting tomcat stops (will not fallback to killing...)" >&2
+		
+			# check if running and ignore if not
+			PID_VALUE=$(get_pid)
+		
+			if [ "$PID_VALUE" != "-1" ] ; then
+				${CATALINA_HOME}/bin/catalina.sh stop 30 || die_with "Shutdown failed"
+			else
+				echo "Domain is not running" >&2
+				return 0
+			fi
+		
+		;;
+		stop)
+	
+			die_unless_tomcat "$COMMAND"
+			
+			# check if running and ignore if not
+			PID_VALUE=$(get_pid)
+		
+			if [ "$PID_VALUE" != "-1" ] ; then
+				${CATALINA_HOME}/bin/catalina.sh stop -force 30 || die_with "Shutdown failed"
+			else
+				echo "Domain is not running" >&2
+				return 0
+			fi
+		
+		;;
+		stop-wait)
+		
+			die_unless_tomcat "$COMMAND"
+	
+			# check if running and ignore if not
+			PID_VALUE=$(get_pid)
+
+			if [ "$PID_VALUE" != "-1" ] ; then
+				${CATALINA_HOME}/bin/catalina.sh stop 300 || die_with "Shutdown failed"
+			else
+				echo "Domain is not running" >&2
+				return 0
+			fi
+		
+		;;
+		configtest)
+	
+			# check if running and ignore if not
+			PID_VALUE=$(get_pid)
+
+			if [ "$PID_VALUE" != "-1" ] ; then
+				die_with "Domain is running! Must perform configtest when domain is not running!"
+			else
+				echo "Requesting tomcat configuration test..."
+				${CATALINA_HOME}/bin/catalina.sh configtest || die_with "Config test failed"
+			fi
+
+		;;
+		restart)
+	
+			die_unless_tomcat "$COMMAND"
+			# Safely stop the domain
+			runcmd stop
+		
+			# Start the domain again
+			runcmd start
+		;;
+		stacktrace)
+
+			die_unless_tomcat "$COMMAND"
+			
+			PID_VALUE=$(get_pid)
+			
+			if [ "$PID_VALUE" != "-1" ] ; then
+				echo "Requesting JVM produce stack trace by sending it Signal 3"
+				
+				# Send a SIGQUIT (under HotSpot this results in a stack trace being written to catalina.out)
+				kill -3 "$PID_VALUE"
+			else
+				die_with "Domain is not running!"
+			fi
+		
+		;;
+		gc)
+			die_unless_tomcat "$COMMAND"
+			
+			PID_VALUE=$(get_pid)
+			
+			if [ "$PID_VALUE" != "-1" ] ; then
+				${JAVA_HOME}/bin/jcmd $PID_VALUE GC.run
+			else
+				die_with "Domain is not running!"
+			fi
+		;;
+		heap|histo|histo:live|clstats|dump|dump:*)
+
+			die_unless_tomcat "$COMMAND"
+			
+			PID_VALUE=$(get_pid)
+			
+			if [ "$PID_VALUE" != "-1" ] ; then
+				if [ "$COMMAND" = "dump" ] ; then
+					DUMPFILE="heap.${PID_VALUE}-$(date +%Y-%m-%d.%H%M%S).bin"
+					COMMAND="dump:format=b,file=$DUMPFILE"
+					echo "Writing heap to $DUMPFILE"
+				elif [ "$COMMAND" = "dump:live" ] ; then
+					DUMPFILE="heap.${PID_VALUE}-$(date +%Y-%m-%d.%H%M%S).bin"
+					COMMAND="dump:live,format=b,file=$DUMPFILE"
+					echo "Writing live heap to $DUMPFILE"
+				fi
+
+				${JAVA_HOME}/bin/jmap "-${COMMAND}" $PID_VALUE
+				
+				# Send a SIGQUIT (under HotSpot this results in a stack trace being written to catalina.out)
+				kill -3 "$PID_VALUE"
+			else
+				die_with "Domain is not running!"
+			fi
+		
+		;;
+		add-database)
+			cat <<EOF
+Add the following to the bottom of ${CATALINA_HOME}/conf/context.xml
+Remember to replace {source-name}, {username}, {password}, {jdbc-driver-class} and {jdbc-url}
+
+      <Resource name="jdbc/{source-name}"
+			username="{username}" password="{password}"
+			driverClassName="{jdbc-driver-class}"
+			url="{jdbc-url}"
+			auth="Container"
+			type="javax.sql.DataSource"
+			factory="org.apache.tomcat.jdbc.pool.DataSourceFactory"
+			testWhileIdle="true"
+			testOnBorrow="true"
+			testOnReturn="false"
+			validationQuery="SELECT 1"
+			validationInterval="30000"
+			timeBetweenEvictionRunsMillis="30000"
+			initialSize="0"
+			maxActive="100"
+			minIdle="0"
+			maxWait="10000"
+			removeAbandonedTimeout="600"
+			removeAbandoned="true"
+			logAbandoned="true"
+			minEvictableIdleTimeMillis="300000"
+			jmxEnabled="true"
+			jdbcInterceptors="org.apache.tomcat.jdbc.pool.interceptor.ConnectionState;org.apache.tomcat.jdbc.pool.interceptor.StatementFinalizer"
+	/>
+EOF
+		
+		;;
+		redeploy-stale-webapps)
+			
+			die_unless_tomcat "Redeploy stale webapps"
+			
+			if [ -n "$(runcmd list-stale-webapps)" ] ; then
+				runcmd stat-stale-webapps
+			
+				# TODO if tomcat is stopped then touch won't work, we need to delete the folder instead so tomcat will redeploy on startup
+				TOMCAT_PID=$(runcmd pid)
+			
+				for WEBAPP in $(runcmd list-stale-webapps)
+				do
+					if [ "$TOMCAT_PID" = "-1" ] ; then
+						echo "Removing $WEBAPP folder (will redeploy on startup)"
+						rm -rf webapps/${WEBAPP}
+					else
+						echo "Setting last modified to now for webapp: $WEBAPP in domain $DOMAIN_NAME"
+						touch webapps/${WEBAPP}.war
+					fi
+				done
+			else
+				echo "All webapps are up-to-date"
+			fi
+		;;
+		stat-stale-webapps)
+			for WEBAPP in $(runcmd list-stale-webapps)
+			do
+				echo "$WEBAPP"
+				echo "	  .war modified $(stat -c %y webapps/${WEBAPP}.war)"
+				echo "	folder modified $(stat -c %y webapps/${WEBAPP}))"
+				touch webapps/${WEBAPP}.war
+			done
+		;;
+		list-stale-webapps)
+			for WAR in webapps/*.war
+			do
+				# Don't run if there weren't any webapps
+				if [ -e "$WAR" ] ; then
+					WEBAPP_FOLDER="$(dirname "$WAR")/$(basename "$WAR" .war)"
+				
+					if [ -e "$WEBAPP_FOLDER" ] ; then
+						# Echo the webapp name if the .war is newer than the running webapp's folder
+						if [ "$WAR" -nt "$WEBAPP_FOLDER" ] ; then
+							# TODO consider the case where the .war is newer by a few seconds?
+							basename "$WAR" .war
+						fi
+					fi
+				fi
+			done
+		;;
+		*)
+			die_with_usage "Unknown domain command: $COMMAND"
+		;;
+	esac
+}
+
+runcmd $DOMAIN_COMMAND

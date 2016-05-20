@@ -81,24 +81,25 @@ function print_usage() {
 	echo "	$0 --name <domainName> --command <command>"
 	echo ""
 	echo "The following commands are supported:"
-	echo "	start          start the domain (killing it if it's already running)"
-	echo "	try-stop       request that the domain stop but do not track or terminate it"
-	echo "	stop           request the domain stop, and kill if it it doesn't stop"
-	echo "	stop-wait      request the domain stop, and wait for up to 5 minutes for it to do so"
-	echo "	kill           kill the domain with SIGKILL if it is running"
-	echo "	restart        stop-wait then start"
-	echo "	debug          start with debugging enabled"
-	echo "	jpda           start with JPDA debugging enabled"
-	echo "	tclog          tail -f the domain's catalina.out"
-	echo "	delete         kill and delete the domain"
-	echo "	pid            print the PID of the domain if running, otherwise -1 if not running"
-	echo "	status         print whether the domain is running"
-	echo "	add-database   display instructions on adding a database to this domain"
-	echo "	stacktrace     request that the JVM emit a stack trace to the log file"
-	echo "  heap           request that jmap display the java heap summary"
-	echo "  histo          request that jmap display a histogram of the java object heap"
-	echo "  histo:live     request that jmap display a histogram of the live java object heap"
-	echo "  dump:*         pass a custom jmap dump: command (e.g. dump:live,format=b,file=heap.bin)"
+	echo "	start            start the domain (killing it if it's already running)"
+	echo "	start-ignore-pid start the domain (killing it if it's already running) but ignoring any PID file write errors"
+	echo "	try-stop         request that the domain stop but do not track or terminate it"
+	echo "	stop             request the domain stop, and kill if it it doesn't stop"
+	echo "	stop-wait        request the domain stop, and wait for up to 5 minutes for it to do so"
+	echo "	kill             kill the domain with SIGKILL if it is running"
+	echo "	restart          stop-wait then start"
+	echo "	debug            start with debugging enabled"
+	echo "	jpda             start with JPDA debugging enabled"
+	echo "	tclog            tail -f the domain's catalina.out"
+	echo "	delete           kill and delete the domain"
+	echo "	pid              print the PID of the domain if running, otherwise -1 if not running"
+	echo "	status           print whether the domain is running"
+	echo "	add-database     display instructions on adding a database to this domain"
+	echo "	stacktrace       request that the JVM emit a stack trace to the log file"
+	echo "  heap             request that jmap display the java heap summary"
+	echo "  histo            request that jmap display a histogram of the java object heap"
+	echo "  histo:live       request that jmap display a histogram of the live java object heap"
+	echo "  dump:*           pass a custom jmap dump: command (e.g. dump:live,format=b,file=heap.bin)"
 	echo ""
 	echo "Stale webapps (where the .war is newer than the folder) are handled automatically at start time,"
 	echo "however the following commands allow them to be dealt with at runtime:"
@@ -145,32 +146,73 @@ export CATALINA_HOME=$LAUNCHER_ROOT/shared
 export CATALINA_BASE=$DOMAIN_FOLDER
 export CATALINA_PID=$DOMAIN_FOLDER/.pid
 
-get_pid() {
-	if [ -e "$CATALINA_PID" ] ; then
+# Get a potential PID for a Java process with the right working directory
+# Ignoring the CATALINA_PID file
+get_potential_pid() {
 		which pgrep 2>/dev/null >/dev/null
 		
 		if [ "$?" = "0" ] ; then
 			# Make sure we only return Java processes owned by the tomcat user
-			PGREP_RESULT=$(pgrep -F $CATALINA_PID java -u $CATALINA_USER)
+			PGREP_RESULTS=$(pgrep java -u $CATALINA_USER | sort -r)
+			
+			# If pgrep found a process...
+			if [ -n "$PGREP_RESULTS" ] ; then
+				for PGREP_RESULT in $PGREP_RESULTS
+				do
+					# Get the working directory of this PID
+					PID_WORKING_DIRECTORY="$(get_pid_wd "$PGREP_RESULT")"
+					
+					if [ "$PID_WORKING_DIRECTORY" = "$DOMAIN_FOLDER" ] ; then
+						# Directory matched
+						echo "${PGREP_RESULT}"
+						return 0
+					fi
+				done
+				
+				# No processes matched
+				echo "-1"
+			else
+				# pgrep returned no results
+				echo "-1"
+			fi
+		else
+			# pgrep not available
+			echo "-1"
+		fi
+}
+
+# Get the process id of the running tomcat using the CATALINA_PID file
+get_pid() {
+	if [ -e "$CATALINA_PID" ] ; then
+	
+		# If the catalina PID file contains -1 then don't continue
+		CATALINA_PID_FILE_VALUE="$(cat "$CATALINA_PID")"
+		
+		if [ "$CATALINA_PID_FILE_VALUE" = "-1" ] ; then
+			echo "-1"
+			return 0
+		elif [ -z "$CATALINA_PID_FILE_VALUE" ] ; then
+			echo "-1"
+			return 0
+		fi
+	
+		which pgrep 2>/dev/null >/dev/null
+		
+		if [ "$?" = "0" ] ; then
+			# Make sure we only return Java processes owned by the tomcat user
+			PGREP_RESULT=$(pgrep -F $CATALINA_PID java -u $CATALINA_USER 2>/dev/null)
 			
 			if [ "$?" = "0" ] ; then
-				which pwdx 2>/dev/null >/dev/null
+			
+				# Get the working directory of this PID
+				PID_WORKING_DIRECTORY="$(get_pid_wd "$PGREP_RESULT")"
 				
-				# If pwds is available and we are the tomcat user...
-				if [ "$?" = "0" ] && [ "$(whoami)" = "$CATALINA_USER" ] ; then
-					#  pwdx is present, check that the working directory of the process is what we expect
-					pwdx "$PGREP_RESULT" | grep "$DOMAIN_FOLDER" >/dev/null 2>/dev/null
-					
-					if [ "$?" = "0" ] ; then
-						# pwdx gave the working directory we expected, this process id looks like it's right
-						echo "$PGREP_RESULT"
-					else
-						# pwdx gave a different working directory than we expected
-						echo "-1"
-					fi
+				if [ "$PID_WORKING_DIRECTORY" = "$DOMAIN_FOLDER" ] ; then
+					# Directory matched
+					echo "${PGREP_RESULT}"
 				else
-					# No pwdx, should we fall back on checking where /proc/<pid>/cwd points to (assuming it exists)?
-					echo "$PGREP_RESULT"
+					# Directory did not match
+					echo "-1"
 				fi
 			else
 				# pgrep returned no results
@@ -183,6 +225,30 @@ get_pid() {
 	else
 		echo "-1"
 	fi
+}
+
+# Get the working directory of a process by process id
+get_pid_wd() {
+	SEARCH_PID="$1"
+	
+	which pwdx 2>/dev/null >/dev/null
+	
+	# If pwdx is available and we are the tomcat user...
+	if [ "$?" = "0" ] && [ "$(whoami)" = "$CATALINA_USER" ] ; then
+		#  pwdx is present, check that the working directory of the process is what we expect
+		PID_WORKING_DIRECTORY=$(pwdx "$SEARCH_PID" 2>/dev/null | cut -d' ' -f2)
+	else
+		# No pwdx, should we fall back on checking where /proc/<pid>/cwd points to (assuming it exists)?
+		if [ -e "/proc/${SEARCH_PID}/cwd" ] ; then
+			# Fallback under linux - /proc
+			PID_WORKING_DIRECTORY=$(cat "/proc/${SEARCH_PID}/cwd")
+		else
+			# Fallback for OS X
+			PID_WORKING_DIRECTORY=$(lsof -n -a -d cwd -p "${SEARCH_PID}" | awk 'FNR > 1 {print $9}')
+		fi
+	fi
+	
+	echo "$PID_WORKING_DIRECTORY"
 }
 
 function runcmd() {
@@ -228,6 +294,19 @@ function runcmd() {
 			fi
 		
 		;;
+		potential-pid)
+			# Get PID but ignore CATALINA_PID file
+			PID_VALUE=$(get_potential_pid)
+
+			echo "$PID_VALUE"
+		
+			if [ "$PID_VALUE" = "-1" ] ; then
+				return 10
+			else
+				return 0
+			fi
+		
+		;;
 		pid)
 	
 			PID_VALUE=$(get_pid)
@@ -255,7 +334,7 @@ function runcmd() {
 			fi
 			
 		;;
-		start|debug|jpda)
+		start|start-ignore-pid|debug|jpda)
 	
 			die_unless_tomcat "$COMMAND"
 			
@@ -268,9 +347,31 @@ function runcmd() {
 		
 			# Find all webapps with unpacked folders older than their .war files and delete the unpacked folders to force a redeploy
 			runcmd redeploy-stale-webapps || die_with "Failed to prep stale webapps for redeploy"
+			
+			# Test that the PID file can be written to
+			if [ "$COMMAND" != "start-ignore-pid" ] ; then
+				printf -- -1 > $CATALINA_PID || die_with "Startup failed (PID file could not be written by $0)"
+			fi
 
-			exec ${CATALINA_HOME}/bin/catalina.sh $COMMAND || die_with "Startup failed"
+			${CATALINA_HOME}/bin/catalina.sh $COMMAND || die_with "Startup failed (exit code $?)"
 
+			if [ "$COMMAND" != "start-ignore-pid" ] ; then			
+				# Read the PID file value back
+				PID_VALUE=$(get_pid)
+			
+				# If we lose the running process (it terminates / cannot write to the PID file)
+				if [ "$PID_VALUE" = "-1" ] ; then
+					RUNNING_PID=$(get_potential_pid)
+				
+					# Did find a running process
+					if [ "$RUNNING_PID" != "-1" ] ; then
+						echo "Killing started tomcat ($RUNNING_PID) - pid file not written!"
+						kill -9 "$RUNNING_PID"
+					fi
+				
+					die_with "Startup failed (PID file not written / process died!)"
+				fi
+			fi
 		;;
 		try-stop)
 	

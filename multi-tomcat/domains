@@ -111,7 +111,7 @@ function print_usage() {
 	echo "	$0 log [<domainName>[,<domainName2>...]]"
 	echo "		This executes tail -f on the catalina.out files for each of the listed domains in parallel"
 	echo ""
-	echo "Full list of supported domain commands, run domain --help"
+	echo "For a full list of supported domain commands, run domain --help"
 	echo ""
 	echo "Anywhere <domainName> appears, the following special values are permitted:"
 	echo "	all      apply the operation to each domain sequentially (default if no domain name is specified)"

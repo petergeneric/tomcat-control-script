@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 # The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
@@ -111,7 +111,7 @@ function print_usage() {
 	echo "	$0 log [<domainName>[,<domainName2>...]]"
 	echo "		This executes tail -f on the catalina.out files for each of the listed domains in parallel"
 	echo ""
-	echo "For a full list of supported domain commands, run domain --help"
+	echo "Full list of supported domain commands, run domain --help"
 	echo ""
 	echo "Anywhere <domainName> appears, the following special values are permitted:"
 	echo "	all      apply the operation to each domain sequentially (default if no domain name is specified)"
@@ -161,22 +161,16 @@ function domains_shared_upgrade() {
 		echo "      shared/VERSION.txt    $(cat $LAUNCHER_ROOT/shared/VERSION.txt)"
 	fi
 	
-
-	if [ -e $LAUNCHER_ROOT/shared/bin/setenv.sh ] ; then
-		if [ ! -e $LAUNCHER_ROOT/setenv.sh ] ; then
-			cp $LAUNCHER_ROOT/shared/bin/setenv.sh $LAUNCHER_ROOT/
-		fi
-	fi
-
 	rm -rf $LAUNCHER_ROOT/shared/bin
 	rm $LAUNCHER_ROOT/shared/lib/*.jar
+
+	# Set jarsToSkip to *.jar	
+	perl -pi -e 's/tomcat.util.scan.StandardJarScanFilter.jarsToSkip=/tomcat.util.scan.StandardJarScanFilter.jarsToSkip=*.jar\n\n#Default jars to skip (ignored)\ntomcat.util.scan.StandardJarScanFilter.jarsToSkipIGNORED=/' $DIST_FOLDER/conf/catalina.properties
+	
 	
 	ln -s $DIST_FOLDER/bin $LAUNCHER_ROOT/shared/bin || die_with "Failed to symlink bin folder!"
 	ln -s $DIST_FOLDER/lib/* $LAUNCHER_ROOT/shared/lib/ || die_with "Failed to symlink lib folder contents!"
 	cp $DIST_FOLDER/VERSION.txt $LAUNCHER_ROOT/shared/VERSION.txt || die_with "Failed to copy distribution VERSION.txt"
-	if [ -e "$LAUNCHER_ROOT/setenv.sh" ] ; then
-		ln -s "$LAUNCHER_ROOT/setenv.sh" "$LAUNCHER_ROOT/shared/bin/setenv.sh"
-	fi
 }
 
 function domain_create() {

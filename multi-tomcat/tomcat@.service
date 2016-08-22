@@ -1,0 +1,30 @@
+# Systemd unit file for tomcat domain
+# For simple use: once installed, enable for a domain with: systemctl enable tomcat@[domain].service
+#
+# Alternatively, to model dependencies copy this file as a systemd service and replace %i with the domain name
+# In this case, specify the other systemd services that are required first in Requires=
+
+[Unit]
+Description=%i tomcat domain
+After=syslog.target network.target
+
+# If this tomcat has dependencies on other resources, list them here
+#Requires=
+
+
+[Service]
+Type=forking
+Restart=on-failure
+
+ExecStart=/opt/tomcat/bin/domains start %i
+ExecStop=/opt/tomcat/bin/domains stop %i
+ExecReload=/opt/tomcat/bin/domains restart %i
+ExecReload=/opt/tomcat/bin/domains restart %i
+PIDFile=/opt/tomcat/%i/.pid
+
+User=tomcat
+Group=tomcat
+
+[Install]
+WantedBy=multi-user.target
+Alias=%i

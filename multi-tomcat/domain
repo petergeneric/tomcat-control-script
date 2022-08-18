@@ -201,6 +201,13 @@ function runcmd() {
 			# Tail the logs
 			exec tail -f $DOMAIN_FOLDER/logs/catalina.out
 		;;
+		lesslog | ll)
+			exec less -n '+G' $DOMAIN_FOLDER/logs/catalina.out
+		;;
+		logfile)
+			echo "$DOMAIN_FOLDER/logs/catalina.out"
+			exit 1
+		;;
 		delete)
 		
 			die_unless_tomcat "$COMMAND"

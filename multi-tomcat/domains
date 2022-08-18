@@ -35,6 +35,7 @@ function die_unless_tomcat() {
 # Set the launcher root
 LAUNCHER_ROOT=$(cd "$(dirname "$0")" ; cd .. ; pwd)
 DIST_FOLDER="$LAUNCHER_ROOT/distribution"
+SHARED_FOLDER="$LAUNCHER_ROOT/shared"
 
 if [ ! -e "$LAUNCHER_ROOT/conf/user" ] ; then
 	die_with "No user configured in $LAUNCHER_ROOT/conf/user"
@@ -119,8 +120,40 @@ function print_usage() {
 	echo "	stopped  all domains that are not running"
 }
 
+function domains_shared_upgrade() {
+        die_unless_tomcat "update shared/ folder"
+
+        if [ ! -e "$LAUNCHER_ROOT/distribution" ] ; then
+                echo "No distribution folder found in $LAUNCHER_ROOT - please download tomcat >= 8.0 and unpack to ${LAUNCHER_ROOT}/distribution and add a VERSION.txt describing the version" >&2
+
+                exit 100
+        fi
+
+        # Validate that the folders we expect to see are present
+        for f in $LAUNCHER_ROOT/shared/ $LAUNCHER_ROOT/shared/lib/ $LAUNCHER_ROOT/shared/bin/ $DIST_FOLDER/bin $DIST_FOLDER/lib $DIST_FOLDER/VERSION.txt
+        do
+                if [ ! -e "$f" ] ; then
+                        die_with "Expected file/folder '${f}' does not exist, cannot upgrade it!"
+                fi
+        done
+
+        echo "distribution/VERSION.txt    $(cat $DIST_FOLDER/VERSION.txt)"
+        if [ -e $LAUNCHER_ROOT/shared/VERSION.txt ] ; then
+                echo "      shared/VERSION.txt    $(cat $LAUNCHER_ROOT/shared/VERSION.txt)"
+        fi
+
+        rm -rf $LAUNCHER_ROOT/shared/bin
+
+        # Set jarsToSkip to *.jar
+        perl -pi -e 's/tomcat.util.scan.StandardJarScanFilter.jarsToSkip=/tomcat.util.scan.StandardJarScanFilter.jarsToSkip=*.jar\n\n#Default jars to skip (ignored)\ntomcat.util.scan.StandardJarScanFilter.jarsToSkipIGNORED=/' $LAUNCHER_ROOT/*/conf/catalina.properties
+
+
+        ln -s $DIST_FOLDER/bin $LAUNCHER_ROOT/shared/bin || die_with "Failed to symlink bin folder!"
+        cp $DIST_FOLDER/VERSION.txt $LAUNCHER_ROOT/shared/VERSION.txt || die_with "Failed to copy distribution VERSION.txt"
+}
+
 # Make sure there's a shared folder
-if [ ! -e "$LAUNCHER_ROOT/shared" ] ; then
+if [ ! -e "$SHARED_FOLDER" ] ; then
 
 	die_unless_tomcat "create shared/ tomcat folder (needed because it does not exist)"
 	
@@ -133,45 +166,11 @@ if [ ! -e "$LAUNCHER_ROOT/shared" ] ; then
 	mkdir $LAUNCHER_ROOT/shared || die_with "Failed to create shared folder!"
 	mkdir $LAUNCHER_ROOT/shared/lib || die_with "Failed to create shared/lib folder!"
 	mkdir $LAUNCHER_ROOT/shared/bin || die_with "Failed to create shared/bin folder!"
-	mkdir $LAUNCHER_ROOT/shared/endorsed
+	mkdir $LAUNCHER_ROOT/shared/ext || die_with "Failed to create shared/ext folder!"
 	
 	# Now that we've created the folder structure, treat the remainder of the operation like an upgrade
 	domains_shared_upgrade
 fi
-
-function domains_shared_upgrade() {
-	die_unless_tomcat "update shared/ folder"
-
-	if [ ! -e "$LAUNCHER_ROOT/distribution" ] ; then
-		echo "No distribution folder found in $LAUNCHER_ROOT - please download tomcat >= 8.0 and unpack to ${LAUNCHER_ROOT}/distribution and add a VERSION.txt describing the version" >&2
-		
-		exit 100
-	fi
-
-	# Validate that the folders we expect to see are present	
-	for f in $LAUNCHER_ROOT/shared/ $LAUNCHER_ROOT/shared/lib/ $LAUNCHER_ROOT/shared/bin/ $DIST_FOLDER/bin $DIST_FOLDER/lib $DIST_FOLDER/VERSION.txt
-	do
-		if [ ! -e "$f" ] ; then
-			die_with "Expected file/folder '${f}' does not exist, cannot upgrade it!"
-		fi
-	done
-	
-	echo "distribution/VERSION.txt    $(cat $DIST_FOLDER/VERSION.txt)"
-	if [ -e $LAUNCHER_ROOT/shared/VERSION.txt ] ; then
-		echo "      shared/VERSION.txt    $(cat $LAUNCHER_ROOT/shared/VERSION.txt)"
-	fi
-	
-	rm -rf $LAUNCHER_ROOT/shared/bin
-	rm $LAUNCHER_ROOT/shared/lib/*.jar
-
-	# Set jarsToSkip to *.jar	
-	perl -pi -e 's/tomcat.util.scan.StandardJarScanFilter.jarsToSkip=/tomcat.util.scan.StandardJarScanFilter.jarsToSkip=*.jar\n\n#Default jars to skip (ignored)\ntomcat.util.scan.StandardJarScanFilter.jarsToSkipIGNORED=/' $DIST_FOLDER/conf/catalina.properties
-	
-	
-	ln -s $DIST_FOLDER/bin $LAUNCHER_ROOT/shared/bin || die_with "Failed to symlink bin folder!"
-	ln -s $DIST_FOLDER/lib/* $LAUNCHER_ROOT/shared/lib/ || die_with "Failed to symlink lib folder contents!"
-	cp $DIST_FOLDER/VERSION.txt $LAUNCHER_ROOT/shared/VERSION.txt || die_with "Failed to copy distribution VERSION.txt"
-}
 
 function domain_create() {
 
@@ -224,13 +223,20 @@ function domain_create() {
 	DOMAIN_FOLDER=$LAUNCHER_ROOT/$DOMAIN_NAME
 
 	mkdir $DOMAIN_FOLDER || die_with "Failed to create domain folder: $DOMAIN_FOLDER"
-	cp -r $DIST_FOLDER/lib $DOMAIN_FOLDER/lib
+
 	cp -r $DIST_FOLDER/conf $DOMAIN_FOLDER/conf
 	
 	mkdir $DOMAIN_FOLDER/bin
 	mkdir $DOMAIN_FOLDER/webapps
 	mkdir $DOMAIN_FOLDER/temp
 	mkdir $DOMAIN_FOLDER/work
+	mkdir $DOMAIN_FOLDER/lib
+
+        ln -s "$DIST_FOLDER/lib/"*.jar "$DOMAIN_FOLDER/lib/" || die_with "Failed to symlink $DIST_FOLDER/lib/*.jar to $DOMAIN_FOLDER/lib folder!"
+        if [ -e "$SHARED_FOLDER/ext" ] ; then
+                ln -s "$SHARED_FOLDER/ext/"*.jar "$DOMAIN_FOLDER/lib/" || die_with "Failed to symlink $SHARED_FOLDER/ext/*.jar to $DOMAIN_FOLDER/lib folder!"
+		rm "$DOMAIN_FOLDER/lib/"'/*.jar' 2>/dev/null >/dev/null
+        fi
 	
 	if [ -w /var/log/tomcat ] ; then
 		if [ -e "/var/log/tomcat/${DOMAIN_NAME}" ] ; then

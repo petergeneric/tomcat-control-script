@@ -375,6 +375,12 @@ function domain_action() {
 			fi
 
 			;;
+		logfile)
+			cd "$LAUNCHER_ROOT"
+
+			resolve_aliases "$DOMAIN_NAMES" | perl -pe "s|^(.*)\n|${LAUNCHER_ROOT}/\$1/logs/catalina.out\n|g"
+			exit 0
+			;;
 		*)
 			for DOMAIN_NAME in $(resolve_aliases "$DOMAIN_NAMES")
 			do

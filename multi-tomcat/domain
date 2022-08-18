@@ -301,7 +301,7 @@ function runcmd() {
 			PID_VALUE=$(get_pid)
 		
 			if [ "$PID_VALUE" != "-1" ] ; then
-				${CATALINA_HOME}/bin/catalina.sh stop -force 30 || die_with "Shutdown failed"
+				${CATALINA_HOME}/bin/catalina.sh stop || die_with "Shutdown failed"
 			else
 				echo "Domain is not running" >&2
 				return 0

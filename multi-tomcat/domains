@@ -91,6 +91,9 @@ function print_usage() {
 	echo "UPGRADING TOMCAT VERSION"
 	echo "	$0 upgrade"
 	echo "		This upgrades the tomcat .sh and .jar files used in the shared/ folder to the version in the distribution folder. Does not modify domain tomcat conf/ folders."
+	echo "  $0 relink"
+	echo "          This will link any jar files stored in /opt/tomcat/shared/ext into each domain folder. This action will require a restart, and should be performed while domains are stopped"
+	echo ""
 	echo ""
 	echo "CONTROLLING A DOMAIN"
 	echo ""
@@ -171,6 +174,23 @@ if [ ! -e "$SHARED_FOLDER" ] ; then
 	# Now that we've created the folder structure, treat the remainder of the operation like an upgrade
 	domains_shared_upgrade
 fi
+
+function domains_relink_jars() {
+	for DOMAIN_NAME in $(resolve_aliases all)
+	do
+		echo "Relink $DOMAIN_NAME"
+		DOMAIN_PATH=${LAUNCHER_ROOT}/${DOMAIN_NAME}
+
+		# Delete any broken symlinks
+		find "$DOMAIN_PATH/lib" -xtype l -delete
+
+		# Set up symlinks
+		ln -s $LAUNCHER_ROOT/shared/ext/*.jar "$DOMAIN_PATH/lib" 2>/dev/null
+
+		# Run another broken symlink pass
+		find "$DOMAIN_PATH/lib" -xtype l -delete
+	done
+}
 
 function domain_create() {
 
@@ -380,6 +400,10 @@ function runcmd() {
 		;;
 		upgrade)
 			domains_shared_upgrade
+			exit 0
+		;;
+		relink)
+			domains_relink_jars
 			exit 0
 		;;
 		add|create)

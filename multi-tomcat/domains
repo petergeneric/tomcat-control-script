@@ -328,10 +328,10 @@ function resolve_aliases_raw() {
 				echo "$DOMAIN_NAME"
 			elif [ -f "${LAUNCHER_ROOT}/conf/alias/${DOMAIN_NAME}" ] ; then
 				resolve_aliases_raw "$(cat "${LAUNCHER_ROOT}/conf/alias/${DOMAIN_NAME}")"
-			elif [ -f $(echo "${LAUNCHER_ROOT}"/${DOMAIN_NAME}*/DOMAIN.txt) ] ; then
+			elif [ -f "$(echo "${LAUNCHER_ROOT}"/${DOMAIN_NAME}*/DOMAIN.txt)" ] ; then
 				basename $(dirname "${LAUNCHER_ROOT}"/${DOMAIN_NAME}*/DOMAIN.txt)
 			else
-				echo "Not a domain name, valid alias or valid domain prefix: $DOMAIN_NAME" >&2
+				echo "Not a domain name, valid alias or unique domain prefix: $DOMAIN_NAME" >&2
 				exit 2
 			fi
 		;;

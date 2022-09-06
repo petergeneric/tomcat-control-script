@@ -124,7 +124,34 @@ function print_usage() {
 }
 
 function domains_shared_upgrade() {
-        die_unless_tomcat "update shared/ folder"
+	tarball="$1"
+
+	die_unless_tomcat "update shared/ folder"
+
+	if [ -n "$tarball" ] ; then
+		if [ ! -f "$tarball" ] ; then
+			die_with "If argument supplied to upgrade, must be a tarball file that exists! Received: $tarball"
+		fi
+
+		echo "Unpacking $tarball into distribution/ ..."
+
+		cd $LAUNCHER_ROOT
+		rm -rf distribution/
+		mkdir distribution
+		tar -zxf "$tarball" -C distribution/ || die_with "failed to extract tarball with tar -zxf $tarball"
+
+		mv distribution/apache-tomcat-*/* ./distribution
+		rm -rf distribution/apache-tomcat-*
+
+		chmod -R g+rwx distribution/
+		rm -f distribution/bin/*.bat
+		rm -rf distribution/webapps
+		rm -rf distribution/logs
+		rm -rf distribution/temp
+		rm -rf distribution/work
+		
+		grep -Eo 'Apache Tomcat Version\s+[0-9.]+' distribution/RELEASE-NOTES | xargs -n1 echo | tail -n1 > distribution/VERSION.txt
+	fi
 
         if [ ! -e "$LAUNCHER_ROOT/distribution" ] ; then
                 echo "No distribution folder found in $LAUNCHER_ROOT - please download tomcat >= 8.0 and unpack to ${LAUNCHER_ROOT}/distribution and add a VERSION.txt describing the version" >&2
@@ -148,6 +175,7 @@ function domains_shared_upgrade() {
         rm -rf $LAUNCHER_ROOT/shared/bin
 
         # Set jarsToSkip to *.jar
+	
         perl -pi -e 's/tomcat.util.scan.StandardJarScanFilter.jarsToSkip=/tomcat.util.scan.StandardJarScanFilter.jarsToSkip=*.jar\n\n#Default jars to skip (ignored)\ntomcat.util.scan.StandardJarScanFilter.jarsToSkipIGNORED=/' $LAUNCHER_ROOT/*/conf/catalina.properties
 
 
@@ -407,7 +435,7 @@ function runcmd() {
 			exit 1
 		;;
 		upgrade)
-			domains_shared_upgrade
+			domains_shared_upgrade "$@"
 			exit 0
 		;;
 		relink)

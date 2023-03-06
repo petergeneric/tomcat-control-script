@@ -395,6 +395,17 @@ EOF
 			# Record that systemd is enabled
 			echo 1 | run_as_tomcat dd status=none "of=$LAUNCHER_ROOT/conf/systemd"
 		;;
+		install)
+			echo "Setting up /etc/profile.d/tomcat.sh ..."
+			
+			sudo dd status=none of=/etc/profile.d/tomcat.sh <<EOF
+# Tomcat profile.d to allow use of "domains" script
+
+alias domains=/opt/tomcat/bin/domains
+EOF
+
+			return
+		;;
 		startlog)
 			domain_action "start" "$@"
 			domain_action "log" "$@"

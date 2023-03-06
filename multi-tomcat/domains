@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 # The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
@@ -25,17 +25,21 @@ function die_with_usage() {
 	exit 1
 }
 
-function die_unless_tomcat() {
+function run_as_tomcat() {
 	if [ "$(whoami)" != "$CATALINA_USER" ] ; then
-		echo "Operation requires that we be tomcat user but you are not tomcat user: $*"
-		exit 1
+		if [ -n "$SUDO_TO_USER" ] ; then
+			sudo -u "$SUDO_TO_USER" "$@"
+		else
+			"$@"
+		fi
+	else
+		"$@"
 	fi
 }
 
 # Set the launcher root
 LAUNCHER_ROOT=$(cd "$(dirname "$0")" ; cd .. ; pwd)
 DIST_FOLDER="$LAUNCHER_ROOT/distribution"
-SHARED_FOLDER="$LAUNCHER_ROOT/shared"
 
 if [ ! -e "$LAUNCHER_ROOT/conf/user" ] ; then
 	die_with "No user configured in $LAUNCHER_ROOT/conf/user"
@@ -46,26 +50,29 @@ fi
 export CATALINA_USER=$(cat "$LAUNCHER_ROOT/conf/user")
 export JAVA_HOME=$(cat "$LAUNCHER_ROOT/conf/java")
 
+SUDO_TO_USER=""
+
 if [ "$(whoami)" != "$CATALINA_USER" ] ; then
 	# Allow sudo to be disabled for non-root users
 	if [ "$(whoami)" != "root" ] ; then
 		if [ -e "$LAUNCHER_ROOT/conf/allow-sudo" ] ; then
 			case "$(cat "$LAUNCHER_ROOT/conf/allow-sudo")" in
 				yes|true|1)
-					# Switch to the tomcat user
-					exec sudo -u "$CATALINA_USER" "$0" "$@"
+				# Switch to the tomcat user
+			SUDO_TO_USER="$CATALINA_USER"
+			;;
+			no|false|0)
+				# Don't switch to the tomcat user. Some commands may fail.
+				SUDO_TO_USER=""
 				;;
-				no|false|0)
-					# Don't switch to the tomcat user. Some commands may fail.
-				;;
-				*)
-					die_with "Unknown value in conf/allow-sudo: $(cat "$LAUNCHER_ROOT/conf/allow-sudo")"
+			*)
+				die_with "Unknown value in conf/allow-sudo: $(cat "$LAUNCHER_ROOT/conf/allow-sudo")"
 				;;
 			esac
 		fi
 	else
 		# We are root, switch to the tomcat user
-		exec sudo -u "$CATALINA_USER" "$0" "$@"
+		SUDO_TO_USER="$CATALINA_USER"
 	fi
 fi
 
@@ -81,19 +88,12 @@ function print_usage() {
 	echo "Usage: "
 	echo ""
 	echo "CREATING A NEW DOMAIN"
-	echo "	$0 create <domainName> --port <portNumber> --shutdown-port <portNumber>"
+	echo "	$0 create <domainName> --port <portNumber>"
 	echo "		This creates a new domain, setting the HTTP port to the specified value. Will fail if a domain with this name already exists."
 	echo ""
 	echo "ADDING RESOURCES TO A DOMAIN"
 	echo "	$0 add-database <domainName>"
 	echo "		This displays instructions on how to add a database connection to the specified domain"
-	echo ""
-	echo "UPGRADING TOMCAT VERSION"
-	echo "	$0 upgrade"
-	echo "		This upgrades the tomcat .sh and .jar files used in the shared/ folder to the version in the distribution folder. Does not modify domain tomcat conf/ folders."
-	echo "  $0 relink"
-	echo "          This will link any jar files stored in /opt/tomcat/shared/ext into each domain folder. This action will require a restart, and should be performed while domains are stopped"
-	echo ""
 	echo ""
 	echo "CONTROLLING A DOMAIN"
 	echo ""
@@ -123,108 +123,25 @@ function print_usage() {
 	echo "	stopped  all domains that are not running"
 }
 
-function domains_shared_upgrade() {
-	tarball="$1"
-
-	die_unless_tomcat "update shared/ folder"
-
-	if [ -n "$tarball" ] ; then
-		if [ ! -f "$tarball" ] ; then
-			die_with "If argument supplied to upgrade, must be a tarball file that exists! Received: $tarball"
-		fi
-
-		echo "Unpacking $tarball into distribution/ ..."
-
-		cd $LAUNCHER_ROOT
-		rm -rf distribution/
-		mkdir distribution
-		tar -zxf "$tarball" -C distribution/ || die_with "failed to extract tarball with tar -zxf $tarball"
-
-		mv distribution/apache-tomcat-*/* ./distribution
-		rm -rf distribution/apache-tomcat-*
-
-		chmod -R g+rwx distribution/
-		rm -f distribution/bin/*.bat
-		rm -rf distribution/webapps
-		rm -rf distribution/logs
-		rm -rf distribution/temp
-		rm -rf distribution/work
-		
-		grep -Eo 'Apache Tomcat Version\s+[0-9.]+' distribution/RELEASE-NOTES | xargs -n1 echo | tail -n1 > distribution/VERSION.txt
-	fi
-
-        if [ ! -e "$LAUNCHER_ROOT/distribution" ] ; then
-                echo "No distribution folder found in $LAUNCHER_ROOT - please download tomcat >= 8.0 and unpack to ${LAUNCHER_ROOT}/distribution and add a VERSION.txt describing the version" >&2
-
-                exit 100
-        fi
-
-        # Validate that the folders we expect to see are present
-        for f in $LAUNCHER_ROOT/shared/ $LAUNCHER_ROOT/shared/lib/ $LAUNCHER_ROOT/shared/bin/ $DIST_FOLDER/bin $DIST_FOLDER/lib $DIST_FOLDER/VERSION.txt
-        do
-                if [ ! -e "$f" ] ; then
-                        die_with "Expected file/folder '${f}' does not exist, cannot upgrade it!"
-                fi
-        done
-
-        echo "distribution/VERSION.txt    $(cat $DIST_FOLDER/VERSION.txt)"
-        if [ -e $LAUNCHER_ROOT/shared/VERSION.txt ] ; then
-                echo "      shared/VERSION.txt    $(cat $LAUNCHER_ROOT/shared/VERSION.txt)"
-        fi
-
-        rm -rf $LAUNCHER_ROOT/shared/bin
-
-        # Set jarsToSkip to *.jar
-	
-        perl -pi -e 's/tomcat.util.scan.StandardJarScanFilter.jarsToSkip=/tomcat.util.scan.StandardJarScanFilter.jarsToSkip=*.jar\n\n#Default jars to skip (ignored)\ntomcat.util.scan.StandardJarScanFilter.jarsToSkipIGNORED=/' $LAUNCHER_ROOT/*/conf/catalina.properties
-
-
-        ln -s $DIST_FOLDER/bin $LAUNCHER_ROOT/shared/bin || die_with "Failed to symlink bin folder!"
-        cp $DIST_FOLDER/VERSION.txt $LAUNCHER_ROOT/shared/VERSION.txt || die_with "Failed to copy distribution VERSION.txt"
-}
-
 # Make sure there's a shared folder
-if [ ! -e "$SHARED_FOLDER" ] ; then
+if [ ! -e "$LAUNCHER_ROOT/shared" ] ; then
 
-	die_unless_tomcat "create shared/ tomcat folder (needed because it does not exist)"
-	
 	if [ ! -e "$LAUNCHER_ROOT/distribution" ] ; then
-		echo "No distribution folder found in $LAUNCHER_ROOT - please download tomcat >= 8.0 and unpack to ${LAUNCHER_ROOT}/distribution and add a VERSION.txt describing the version" >&2
+		echo "No distribution folder found in $LAUNCHER_ROOT - please download tomcat >= 8.0 and unpack to ${LAUNCHER_ROOT}/distribution" >&2
 		
 		exit 100
 	fi
 	
-	mkdir $LAUNCHER_ROOT/shared || die_with "Failed to create shared folder!"
-	mkdir $LAUNCHER_ROOT/shared/lib || die_with "Failed to create shared/lib folder!"
-	mkdir $LAUNCHER_ROOT/shared/bin || die_with "Failed to create shared/bin folder!"
-	mkdir $LAUNCHER_ROOT/shared/ext || die_with "Failed to create shared/ext folder!"
+	run_as_tomcat mkdir $LAUNCHER_ROOT/shared || die_with "Failed to create shared folder!"
+	run_as_tomcat cp -r $DIST_FOLDER/lib $LAUNCHER_ROOT/shared/lib
+	run_as_tomcat cp -r $DIST_FOLDER/bin $LAUNCHER_ROOT/shared/bin
+	run_as_tomcat mkdir $LAUNCHER_ROOT/shared/endorsed
 	
-	# Now that we've created the folder structure, treat the remainder of the operation like an upgrade
-	domains_shared_upgrade
+	run_as_tomcat rm $LAUNCHER_ROOT/shared/bin/*.bat
 fi
 
-function domains_relink_jars() {
-	for DOMAIN_NAME in $(resolve_aliases all)
-	do
-		echo "Relink $DOMAIN_NAME"
-		DOMAIN_PATH=${LAUNCHER_ROOT}/${DOMAIN_NAME}
-
-		# Delete any broken symlinks
-		find "$DOMAIN_PATH/lib" -xtype l -delete
-
-		# Set up symlinks
-		ln -s $LAUNCHER_ROOT/shared/ext/*.jar "$DOMAIN_PATH/lib" 2>/dev/null
-
-		# Run another broken symlink pass
-		find "$DOMAIN_PATH/lib" -xtype l -delete
-	done
-}
 
 function domain_create() {
-
-	# Must be the tomcat user
-	die_unless_tomcat "create domain"
-	
 	# Parse command-line options
 	while [[ $# != 0 ]]
 	do
@@ -249,10 +166,6 @@ function domain_create() {
 				DOMAIN_PORT="$1"
 				shift
 			;;
-			-s|--shutdown-port)
-				SHUTDOWN_PORT="$1"
-				shift
-			;;
 			*)
 				# unknown option
 				die_with_usage "Unknown option: $key"
@@ -264,54 +177,33 @@ function domain_create() {
 		die_with_usage "Must supply domain name!"
 	elif [ -z "$DOMAIN_PORT" ] ; then
 		die_with_usage "Must supply domain port!"
-	elif [ -z "$SHUTDOWN_PORT" ] ; then
-		die_with_usage "Must supply shutdown port!"
 	fi
 
 	DOMAIN_FOLDER=$LAUNCHER_ROOT/$DOMAIN_NAME
 
-	mkdir $DOMAIN_FOLDER || die_with "Failed to create domain folder: $DOMAIN_FOLDER"
-
-	cp -r $DIST_FOLDER/conf $DOMAIN_FOLDER/conf
-	
-	mkdir $DOMAIN_FOLDER/bin
-	mkdir $DOMAIN_FOLDER/webapps
-	mkdir $DOMAIN_FOLDER/temp
-	mkdir $DOMAIN_FOLDER/work
-	mkdir $DOMAIN_FOLDER/lib
-
-        ln -s "$DIST_FOLDER/lib/"*.jar "$DOMAIN_FOLDER/lib/" || die_with "Failed to symlink $DIST_FOLDER/lib/*.jar to $DOMAIN_FOLDER/lib folder!"
-        if [ -e "$SHARED_FOLDER/ext" ] ; then
-                ln -s "$SHARED_FOLDER/ext/"*.jar "$DOMAIN_FOLDER/lib/" || die_with "Failed to symlink $SHARED_FOLDER/ext/*.jar to $DOMAIN_FOLDER/lib folder!"
-		rm "$DOMAIN_FOLDER/lib/"'/*.jar' 2>/dev/null >/dev/null
-        fi
-	
-	if [ -w /var/log/tomcat ] ; then
-		if [ -e "/var/log/tomcat/${DOMAIN_NAME}" ] ; then
-			echo "Creating folder for logs: /var/log/tomcat/${DOMAIN_NAME}"
-			mkdir "/var/log/tomcat/${DOMAIN_NAME}"
-		fi
-		
-		ln -s "/var/log/tomcat/${DOMAIN_NAME}" $DOMAIN_FOLDER/logs
-	else
-		echo "/var/log/tomcat is not writable by user $(whoami), logs will be placed in $DOMAIN_FOLDER/logs"
-		mkdir $DOMAIN_FOLDER/logs
-	fi
+	run_as_tomcat mkdir $DOMAIN_FOLDER || die_with "Failed to create domain folder: $DOMAIN_FOLDER"
+	run_as_tomcat cp -r $DIST_FOLDER/lib $DOMAIN_FOLDER/lib
+	run_as_tomcat cp -r $DIST_FOLDER/conf $DOMAIN_FOLDER/conf
+	run_as_tomcat mkdir $DOMAIN_FOLDER/bin
+	run_as_tomcat mkdir $DOMAIN_FOLDER/webapps
+	run_as_tomcat mkdir $DOMAIN_FOLDER/logs
+	run_as_tomcat mkdir $DOMAIN_FOLDER/temp
+	run_as_tomcat mkdir $DOMAIN_FOLDER/work
 
 	# Add a special file to indicate this is a tomcat domain
-cat >$DOMAIN_FOLDER/DOMAIN.txt <<EOF
+	run_as_tomcat dd status=none "of=$DOMAIN_FOLDER/DOMAIN.txt" >/dev/null <<EOF
 This is a tomcat domain managed by external scripts. You should not attempt to use this tomcat install directly.
 Please refer to the documentation in the parent directory.
 EOF
 
-	# Set up the shutdown port and command
-	perl -pi -e 's|port=".*?" shutdown=".*?"|port="${SHUTDOWN_PORT}" shutdown="SHUTDOWN$(uuidgen)"|' $DOMAIN_FOLDER/conf/server.xml
+	# Remove the shutdown port and command (use signals instead)
+	run_as_tomcat perl -pi -e 's|port=".*?" shutdown=".*?"|port="-1" shutdown="SHUTDOWN"|' $DOMAIN_FOLDER/conf/server.xml
 
 	# Remove the AJP connector
-	perl -pi -e 's|<Connector port=".*?" protocol="AJP/1.3" redirectPort="8443" />||' $DOMAIN_FOLDER/conf/server.xml
+	run_as_tomcat perl -pi -e 's|<Connector port=".*?" protocol="AJP/1.3" redirectPort="8443" />||' $DOMAIN_FOLDER/conf/server.xml
 
 	# Change the HTTP port
-	perl -pi -e "s|Connector port=\"8080\" |Connector port=\"${DOMAIN_PORT}\" |" $DOMAIN_FOLDER/conf/server.xml
+	run_as_tomcat perl -pi -e "s|Connector port=\"8080\" |Connector port=\"${DOMAIN_PORT}\" |" $DOMAIN_FOLDER/conf/server.xml
 }
 
 # Takes a comma- or space-separated list of aliases, emits a whitespace-separated list of domains (or dies with an error if invalid names were specified)
@@ -356,10 +248,8 @@ function resolve_aliases_raw() {
 				echo "$DOMAIN_NAME"
 			elif [ -f "${LAUNCHER_ROOT}/conf/alias/${DOMAIN_NAME}" ] ; then
 				resolve_aliases_raw "$(cat "${LAUNCHER_ROOT}/conf/alias/${DOMAIN_NAME}")"
-			elif [ -f "$(echo "${LAUNCHER_ROOT}"/${DOMAIN_NAME}*/DOMAIN.txt)" ] ; then
-				basename $(dirname "${LAUNCHER_ROOT}"/${DOMAIN_NAME}*/DOMAIN.txt)
 			else
-				echo "Not a domain name, valid alias or unique domain prefix: $DOMAIN_NAME" >&2
+				echo "Not a domain name or valid alias: $DOMAIN_NAME" >&2
 				exit 2
 			fi
 		;;
@@ -375,26 +265,21 @@ function domain_action() {
 	action="$1"
 	shift
 	
-	# Ignore if no domain name is supplied
-	if [ -n "$1" ]  ; then
-		# Ignore domain name if the first arg starts with - (it's probably "domains log -n 1024" or equivalent)
-		if [ "${1:0:1}" != "-" ] ; then
-			DOMAIN_NAMES="$1"
-			shift
-		fi
-	fi
+	DOMAIN_NAMES="$1"
+	shift
 	
 	# If no domain name was specified then we should default to "all"
 	if [ -z "$DOMAIN_NAMES" ] ; then
 		DOMAIN_NAMES="all"
 	fi
-	
+
+
 	case "$action" in
 		log|tclog)
-			cd "$LAUNCHER_ROOT"
+			cd $LAUNCHER_ROOT
 			
 			# Special-case: tail multiple log files simultaneously
-			LOG_FILES="$(resolve_aliases "$DOMAIN_NAMES" | perl -pe 's|\n|/logs/catalina.out |g')"
+			LOG_FILES="$(resolve_aliases "$DOMAIN_NAMES" | perl -pe 's|\n|,|g' | perl -pe 's|,|/logs/catalina.out |g')"
 			
 			if [ -n "$LOG_FILES" ] ; then
 				exec tail -f $LOG_FILES "$@"
@@ -403,17 +288,26 @@ function domain_action() {
 			fi
 
 			;;
-		logfile)
-			cd "$LAUNCHER_ROOT"
-
-			resolve_aliases "$DOMAIN_NAMES" | perl -pe "s|^(.*)\n|${LAUNCHER_ROOT}/\$1/logs/catalina.out\n|g"
-			exit 0
-			;;
 		*)
 			for DOMAIN_NAME in $(resolve_aliases "$DOMAIN_NAMES")
 			do
 				printf "$action $DOMAIN_NAME: "
-				$LAUNCHER_ROOT/bin/domain -n "$DOMAIN_NAME" -c "$action" "$@"
+
+				# If systemd mode is enabled and we're not inside systemd unit file, call out to systemctl for status/start/stop
+				if [[ "$IN_SYSTEMD_UNIT_CTX" != "1" && -e $LAUNCHER_ROOT/conf/systemd ]] ; then
+					case "$action" in
+						status)
+							systemctl status "tomcat@${DOMAIN_NAME}"
+							continue
+							;;
+						start|stop|kill|restart|status)
+							sudo systemctl "$action" "tomcat@${DOMAIN_NAME}"
+							continue
+							;;
+					esac
+				fi
+
+				run_as_tomcat $LAUNCHER_ROOT/bin/domain -n "$DOMAIN_NAME" -c "$action" "$@"
 			done
 
 			;;
@@ -424,7 +318,7 @@ function domain_action() {
 function runcmd() {
 	command="$1"
 	shift
-	
+
 	case "$command" in
 		--help)
 			print_usage
@@ -434,19 +328,72 @@ function runcmd() {
 			die_with_usage "Expected: command"
 			exit 1
 		;;
-		upgrade)
-			domains_shared_upgrade "$@"
-			exit 0
-		;;
-		relink)
-			domains_relink_jars
-			exit 0
-		;;
 		add|create)
 			DOMAIN_NAME="$1"
 			shift
 		
 			domain_create -n "$DOMAIN_NAME" "$@"
+
+			if [-e $LAUNCHER_ROOT/conf/systemd ] ; then
+				sudo systemctl enable "tomcat@${DOMAIN_NAME}"
+			fi
+		;;
+		enable-systemd)
+			# Make sure domains are not running
+			for RUNNING_DOMAIN in $(runcmd list running)
+			do
+				runcmd kill "$RUNNING_DOMAIN"
+			done
+
+			SERVICE_SCRIPT="/etc/systemd/system/tomcat@.service"
+
+			if [ ! -e "$SERVICE_SCRIPT" ] ; then
+				echo "Attempting to elevate to root to install tomcat@.service script..."
+				sudo dd status=none "of=$SERVICE_SCRIPT" <<EOF
+# Systemd unit file for tomcat domain
+# For simple use: once installed, enable for a domain with: systemctl enable tomcat@[domain].service
+#
+# Alternatively, to model dependencies copy this file as a systemd service and replace %i with the domain name
+# In this case, specify the other systemd services that are required first in Requires=
+
+[Unit]
+Description=%i tomcat domain
+After=syslog.target network.target
+
+# If this tomcat has dependencies on other resources, list them here
+#Requires=
+
+
+[Service]
+Type=forking
+Restart=on-failure
+
+ExecStart=${LAUNCHER_ROOT}/bin/domains start %i
+ExecStop=${LAUNCHER_ROOT}/bin/domains stop %i
+ExecReload=${LAUNCHER_ROOT}/bin/domains restart %i
+ExecReload=${LAUNCHER_ROOT}/bin/domains restart %i
+PIDFile=${LAUNCHER_ROOT}/%i/.pid
+Environment=IN_SYSTEMD_UNIT_CTX=1
+
+User=${CATALINA_USER}
+Group=${CATALINA_USER}
+
+[Install]
+WantedBy=multi-user.target
+Alias=%i
+EOF
+				if [ ! -e "$SERVICE_SCRIPT" ] ; then
+					die_with "enable-systemd expects /etc/systemd/system/tomcat@.service"
+				fi
+			fi
+
+			for DOMAIN_NAME in $(runcmd list)
+			do
+				sudo systemctl enable "tomcat@${DOMAIN_NAME}"
+			done
+
+			# Record that systemd is enabled
+			echo 1 | run_as_tomcat dd status=none "of=$LAUNCHER_ROOT/conf/systemd"
 		;;
 		startlog)
 			domain_action "start" "$@"

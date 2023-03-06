@@ -19,9 +19,9 @@ function warn() {
 
 function die_with_usage() {
 	echo "$*" >&2
-	
+
 	print_usage
-	
+
 	exit 1
 }
 
@@ -76,7 +76,7 @@ function print_usage() {
 	echo "Multi-domain tomcat management scripts"
 	echo "Copyright (c) 2014-present Peter Wright"
 	echo ""
-	
+
 	echo "Usage: "
 	echo "	$0 --name <domainName> --command <command>"
 	echo ""
@@ -148,19 +148,19 @@ export CATALINA_PID=$DOMAIN_FOLDER/.pid
 get_pid() {
 	if [ -e "$CATALINA_PID" ] ; then
 		which pgrep 2>/dev/null >/dev/null
-		
+
 		if [ "$?" = "0" ] ; then
 			# Make sure we only return Java processes owned by the tomcat user
 			PGREP_RESULT=$(pgrep -F $CATALINA_PID java -u $CATALINA_USER)
-			
+
 			if [ "$?" = "0" ] ; then
 				which pwdx 2>/dev/null >/dev/null
-				
+
 				# If pwds is available and we are the tomcat user...
 				if [ "$?" = "0" ] && [ "$(whoami)" = "$CATALINA_USER" ] ; then
 					#  pwdx is present, check that the working directory of the process is what we expect
 					pwdx "$PGREP_RESULT" | grep "$DOMAIN_FOLDER" >/dev/null 2>/dev/null
-					
+
 					if [ "$?" = "0" ] ; then
 						# pwdx gave the working directory we expected, this process id looks like it's right
 						echo "$PGREP_RESULT"
@@ -187,17 +187,17 @@ get_pid() {
 
 function runcmd() {
 	local COMMAND=$1
-	
+
 	if [ ! -e "$DOMAIN_FOLDER" ] ; then
 		die_with "No such domain: $DOMAIN_NAME"
 	fi
 
 	cd $DOMAIN_FOLDER
 
-	
+
 	case $COMMAND in
 		tclog)
-	
+
 			# Tail the logs
 			exec tail -f $DOMAIN_FOLDER/logs/catalina.out
 		;;
@@ -209,21 +209,21 @@ function runcmd() {
 			exit 1
 		;;
 		delete)
-		
+
 			die_unless_tomcat "$COMMAND"
-			
+
 			# Make sure the domain is not running
-			runcmd kill || die_with "kill operation failed, domain may still have a process running!"				
-		
+			runcmd kill || die_with "kill operation failed, domain may still have a process running!"
+
 			cd $LAUNCHER_ROOT
 			rm -rf $DOMAIN_FOLDER || die_with "Failed to remove domain folder!"
-			
+
 			echo "Domain deleted."
-			
+
 			return 0
 		;;
 		status)
-	
+
 			PID_VALUE=$(get_pid)
 
 			if [ "$PID_VALUE" = "-1" ] ; then
@@ -233,46 +233,46 @@ function runcmd() {
 				echo "Domain is running (PID ${PID_VALUE})"
 				return 0
 			fi
-		
+
 		;;
 		pid)
-	
+
 			PID_VALUE=$(get_pid)
 
 			echo "$PID_VALUE"
-		
+
 			if [ "$PID_VALUE" = "-1" ] ; then
 				return 10
 			else
 				return 0
 			fi
-		
+
 		;;
 		kill)
-		
+
 			die_unless_tomcat "$COMMAND"
-	
+
 			PID_VALUE=$(get_pid)
-		
+
 			if [ "$PID_VALUE" = "-1" ] ; then
 				echo "Domain is not running" >&2
 				return 0
 			else
 				kill -9 "$PID_VALUE"
 			fi
-			
+
 		;;
 		start|debug|jpda)
-	
+
 			die_unless_tomcat "$COMMAND"
-			
+
 			# Kill the process if it's already running
 			PID_VALUE=$(get_pid)
-		
+
 			if [ "$PID_VALUE" != "-1" ] ; then
 				kill -9 "$PID_VALUE"
 			fi
-		
+
 			# Find all webapps with unpacked folders older than their .war files and delete the unpacked folders to force a redeploy
 			runcmd redeploy-stale-webapps || die_with "Failed to prep stale webapps for redeploy"
 
@@ -284,41 +284,41 @@ function runcmd() {
 			fi
 		;;
 		try-stop)
-	
+
 			die_unless_tomcat "$COMMAND"
-			
+
 			echo "Requesting tomcat stops (will not fallback to killing...)" >&2
-		
+
 			# check if running and ignore if not
 			PID_VALUE=$(get_pid)
-		
+
 			if [ "$PID_VALUE" != "-1" ] ; then
 				${CATALINA_HOME}/bin/catalina.sh stop 30 || die_with "Shutdown failed"
 			else
 				echo "Domain is not running" >&2
 				return 0
 			fi
-		
+
 		;;
 		stop)
-	
+
 			die_unless_tomcat "$COMMAND"
-			
+
 			# check if running and ignore if not
 			PID_VALUE=$(get_pid)
-		
+
 			if [ "$PID_VALUE" != "-1" ] ; then
 				${CATALINA_HOME}/bin/catalina.sh stop || die_with "Shutdown failed"
 			else
 				echo "Domain is not running" >&2
 				return 0
 			fi
-		
+
 		;;
 		stop-wait)
-		
+
 			die_unless_tomcat "$COMMAND"
-	
+
 			# check if running and ignore if not
 			PID_VALUE=$(get_pid)
 
@@ -328,10 +328,10 @@ function runcmd() {
 				echo "Domain is not running" >&2
 				return 0
 			fi
-		
+
 		;;
 		configtest)
-	
+
 			# check if running and ignore if not
 			PID_VALUE=$(get_pid)
 
@@ -344,35 +344,35 @@ function runcmd() {
 
 		;;
 		restart)
-	
+
 			die_unless_tomcat "$COMMAND"
 			# Safely stop the domain
 			runcmd stop
-		
+
 			# Start the domain again
 			runcmd start
 		;;
 		stacktrace)
 
 			die_unless_tomcat "$COMMAND"
-			
+
 			PID_VALUE=$(get_pid)
-			
+
 			if [ "$PID_VALUE" != "-1" ] ; then
 				echo "Requesting JVM produce stack trace by sending it Signal 3"
-				
+
 				# Send a SIGQUIT (under HotSpot this results in a stack trace being written to catalina.out)
 				kill -3 "$PID_VALUE"
 			else
 				die_with "Domain is not running!"
 			fi
-		
+
 		;;
 		gc)
 			die_unless_tomcat "$COMMAND"
-			
+
 			PID_VALUE=$(get_pid)
-			
+
 			if [ "$PID_VALUE" != "-1" ] ; then
 				${JAVA_HOME}/bin/jcmd $PID_VALUE GC.run
 			else
@@ -382,18 +382,18 @@ function runcmd() {
 		heap|histo|histo:live|clstats|dump|dump:*)
 
 			die_unless_tomcat "$COMMAND"
-			
+
 			PID_VALUE=$(get_pid)
-			
+
 			if [ "$PID_VALUE" != "-1" ] ; then
 				${JAVA_HOME}/bin/jmap "-${COMMAND}" $PID_VALUE
-				
+
 				# Send a SIGQUIT (under HotSpot this results in a stack trace being written to catalina.out)
 				kill -3 "$PID_VALUE"
 			else
 				die_with "Domain is not running!"
 			fi
-		
+
 		;;
 		add-database)
 			cat <<EOF
@@ -425,18 +425,18 @@ Remember to replace {source-name}, {username}, {password}, {jdbc-driver-class} a
 			jdbcInterceptors="org.apache.tomcat.jdbc.pool.interceptor.ConnectionState;org.apache.tomcat.jdbc.pool.interceptor.StatementFinalizer"
 	/>
 EOF
-		
+
 		;;
 		redeploy-stale-webapps)
-			
+
 			die_unless_tomcat "Redeploy stale webapps"
-			
+
 			if [ -n "$(runcmd list-stale-webapps)" ] ; then
 				runcmd stat-stale-webapps
-			
+
 				# TODO if tomcat is stopped then touch won't work, we need to delete the folder instead so tomcat will redeploy on startup
 				TOMCAT_PID=$(runcmd pid)
-			
+
 				for WEBAPP in $(runcmd list-stale-webapps)
 				do
 					if [ "$TOMCAT_PID" = "-1" ] ; then
@@ -466,7 +466,7 @@ EOF
 				# Don't run if there weren't any webapps
 				if [ -e "$WAR" ] ; then
 					WEBAPP_FOLDER="$(dirname "$WAR")/$(basename "$WAR" .war)"
-				
+
 					if [ -e "$WEBAPP_FOLDER" ] ; then
 						# Echo the webapp name if the .war is newer than the running webapp's folder
 						if [ "$WAR" -nt "$WEBAPP_FOLDER" ] ; then

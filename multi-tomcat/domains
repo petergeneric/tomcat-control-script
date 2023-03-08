@@ -291,22 +291,28 @@ function domain_action() {
 		*)
 			for DOMAIN_NAME in $(resolve_aliases "$DOMAIN_NAMES")
 			do
-				echo -n "$action $DOMAIN_NAME: "
-
 				# If systemd mode is enabled and we're not inside systemd unit file, call out to systemctl for status/start/stop
 				if [[ "$IN_SYSTEMD_UNIT_CTX" != "1" && -e "$LAUNCHER_ROOT/conf/systemd" ]] ; then
 					case "$action" in
 						status)
+							systemctl -n0 --no-pager status "tomcat@${DOMAIN_NAME}" | egrep --color=never '( tomcat@|(Loaded|Active|PID|Memory): )'
+							echo
+							continue
+							;;
+						full-status|fullstatus|systemd-status|full-status)
 							systemctl status "tomcat@${DOMAIN_NAME}"
 							continue
 							;;
 						start|stop|kill|restart)
+							echo "$action $DOMAIN_NAME:"
 							sudo systemctl "$action" "tomcat@${DOMAIN_NAME}"
+							echo
 							continue
 							;;
 					esac
 				fi
 
+				echo -n "$action $DOMAIN_NAME: "
 				run_as_tomcat "$LAUNCHER_ROOT/bin/domain" -n "$DOMAIN_NAME" -c "$action" "$@"
 			done
 

@@ -248,7 +248,7 @@ function resolve_aliases_raw() {
 				echo "$DOMAIN_NAME"
 			elif [ -f "${LAUNCHER_ROOT}/conf/alias/${DOMAIN_NAME}" ] ; then
 				resolve_aliases_raw "$(cat "${LAUNCHER_ROOT}/conf/alias/${DOMAIN_NAME}")"
-			elif [ -f "$(echo "${LAUNCHER_ROOT}"/${DOMAIN_NAME}*/DOMAIN.txt)" ] ; then
+			elif [ -f "$(echo "${LAUNCHER_ROOT}/${DOMAIN_NAME}"*/DOMAIN.txt)" ] ; then
 				basename "$(dirname "${LAUNCHER_ROOT}/${DOMAIN_NAME}"*/DOMAIN.txt)"
 			else
 				echo "Not a domain name or valid alias/prefix: $DOMAIN_NAME" >&2
@@ -297,11 +297,11 @@ function domain_action() {
 				if [[ "$IN_SYSTEMD_UNIT_CTX" != "1" && -e "$LAUNCHER_ROOT/conf/systemd" ]] ; then
 					case "$action" in
 						status)
-							systemctl -n0 --no-pager status "tomcat@${DOMAIN_NAME}" | egrep --color=never '( tomcat@|(Loaded|Active|PID|Memory): )'
+							systemctl -n0 --no-pager status "tomcat@${DOMAIN_NAME}" | grep -E --color=never '( tomcat@|(Loaded|Active|PID|Memory): )'
 							echo
 							continue
 							;;
-						full-status|fullstatus|systemd-status|full-status)
+						full-status|fullstatus|systemd-status)
 							systemctl status "tomcat@${DOMAIN_NAME}"
 							continue
 							;;

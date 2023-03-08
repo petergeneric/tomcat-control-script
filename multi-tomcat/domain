@@ -140,10 +140,10 @@ if [ -z "$DOMAIN_NAME" ] ; then
 	die_with_usage "Must supply domain name!"
 fi
 
-export DOMAIN_FOLDER=$LAUNCHER_ROOT/$DOMAIN_NAME
-export CATALINA_HOME=$LAUNCHER_ROOT/shared
-export CATALINA_BASE=$DOMAIN_FOLDER
-export CATALINA_PID=$DOMAIN_FOLDER/.pid
+export DOMAIN_FOLDER="$LAUNCHER_ROOT/$DOMAIN_NAME"
+export CATALINA_HOME="$LAUNCHER_ROOT/shared"
+export CATALINA_BASE="$DOMAIN_FOLDER"
+export CATALINA_PID="$DOMAIN_FOLDER/.pid"
 
 get_pid() {
 	if [ -e "$CATALINA_PID" ] ; then
@@ -151,7 +151,7 @@ get_pid() {
 
 		if [ "$?" = "0" ] ; then
 			# Make sure we only return Java processes owned by the tomcat user
-			PGREP_RESULT=$(pgrep -F $CATALINA_PID java -u $CATALINA_USER)
+			PGREP_RESULT="$(pgrep -F "$CATALINA_PID" java -u "$CATALINA_USER")"
 
 			if [ "$?" = "0" ] ; then
 				which pwdx 2>/dev/null >/dev/null
@@ -178,7 +178,7 @@ get_pid() {
 			fi
 		else
 			# Just cat the PID file
-			cat $CATALINA_PID
+			cat "$CATALINA_PID"
 		fi
 	else
 		echo "-1"
@@ -192,17 +192,17 @@ function runcmd() {
 		die_with "No such domain: $DOMAIN_NAME"
 	fi
 
-	cd $DOMAIN_FOLDER
+	cd "$DOMAIN_FOLDER" || die_with "Unable to switch to domain folder $DOMAIN_FOLDER"
 
 
 	case $COMMAND in
 		tclog)
 
 			# Tail the logs
-			exec tail -f $DOMAIN_FOLDER/logs/catalina.out
+			exec tail -f "$DOMAIN_FOLDER/logs/catalina.out"
 		;;
 		lesslog | ll)
-			exec less -n '+G' $DOMAIN_FOLDER/logs/catalina.out
+			exec less -n '+G' "$DOMAIN_FOLDER/logs/catalina.out"
 		;;
 		logfile)
 			echo "$DOMAIN_FOLDER/logs/catalina.out"
@@ -215,8 +215,8 @@ function runcmd() {
 			# Make sure the domain is not running
 			runcmd kill || die_with "kill operation failed, domain may still have a process running!"
 
-			cd $LAUNCHER_ROOT
-			rm -rf $DOMAIN_FOLDER || die_with "Failed to remove domain folder!"
+			cd "$LAUNCHER_ROOT" || die_with "Unable to switch to tomcat folder"
+			rm -rf "$DOMAIN_FOLDER" || die_with "Failed to remove domain folder!"
 
 			echo "Domain deleted."
 
@@ -278,9 +278,9 @@ function runcmd() {
 
 			if [ "$COMMAND" = "jpda" ] ; then
 				echo "Starting with JPDA..."
-				exec ${CATALINA_HOME}/bin/catalina.sh jpda start || die_with "JPDA Startup failed"
+				exec "${CATALINA_HOME}/bin/catalina.sh" jpda start || die_with "JPDA Startup failed"
 			else
-				exec ${CATALINA_HOME}/bin/catalina.sh $COMMAND || die_with "Startup failed"
+				exec "${CATALINA_HOME}/bin/catalina.sh" "$COMMAND" || die_with "Startup failed"
 			fi
 		;;
 		try-stop)
@@ -293,7 +293,7 @@ function runcmd() {
 			PID_VALUE=$(get_pid)
 
 			if [ "$PID_VALUE" != "-1" ] ; then
-				${CATALINA_HOME}/bin/catalina.sh stop 30 || die_with "Shutdown failed"
+				"${CATALINA_HOME}/bin/catalina.sh" stop 30 || die_with "Shutdown failed"
 			else
 				echo "Domain is not running" >&2
 				return 0
@@ -308,7 +308,7 @@ function runcmd() {
 			PID_VALUE=$(get_pid)
 
 			if [ "$PID_VALUE" != "-1" ] ; then
-				${CATALINA_HOME}/bin/catalina.sh stop || die_with "Shutdown failed"
+				"${CATALINA_HOME}/bin/catalina.sh" stop || die_with "Shutdown failed"
 			else
 				echo "Domain is not running" >&2
 				return 0
@@ -323,7 +323,7 @@ function runcmd() {
 			PID_VALUE=$(get_pid)
 
 			if [ "$PID_VALUE" != "-1" ] ; then
-				${CATALINA_HOME}/bin/catalina.sh stop 300 || die_with "Shutdown failed"
+				"${CATALINA_HOME}/bin/catalina.sh" stop 300 || die_with "Shutdown failed"
 			else
 				echo "Domain is not running" >&2
 				return 0
@@ -339,7 +339,7 @@ function runcmd() {
 				die_with "Domain is running! Must perform configtest when domain is not running!"
 			else
 				echo "Requesting tomcat configuration test..."
-				${CATALINA_HOME}/bin/catalina.sh configtest || die_with "Config test failed"
+				"${CATALINA_HOME}/bin/catalina.sh" configtest || die_with "Config test failed"
 			fi
 
 		;;
@@ -374,7 +374,7 @@ function runcmd() {
 			PID_VALUE=$(get_pid)
 
 			if [ "$PID_VALUE" != "-1" ] ; then
-				${JAVA_HOME}/bin/jcmd $PID_VALUE GC.run
+				"${JAVA_HOME}/bin/jcmd" "$PID_VALUE" GC.run
 			else
 				die_with "Domain is not running!"
 			fi
@@ -386,7 +386,7 @@ function runcmd() {
 			PID_VALUE=$(get_pid)
 
 			if [ "$PID_VALUE" != "-1" ] ; then
-				${JAVA_HOME}/bin/jmap "-${COMMAND}" $PID_VALUE
+				"${JAVA_HOME}/bin/jmap" "-${COMMAND}" "$PID_VALUE"
 
 				# Send a SIGQUIT (under HotSpot this results in a stack trace being written to catalina.out)
 				kill -3 "$PID_VALUE"
@@ -441,10 +441,10 @@ EOF
 				do
 					if [ "$TOMCAT_PID" = "-1" ] ; then
 						echo "Removing $WEBAPP folder (will redeploy on startup)"
-						rm -rf webapps/${WEBAPP}
+						rm -rf "webapps/${WEBAPP}"
 					else
 						echo "Setting last modified to now for webapp: $WEBAPP in domain $DOMAIN_NAME"
-						touch webapps/${WEBAPP}.war
+						touch "webapps/${WEBAPP}.war"
 					fi
 				done
 			else
@@ -455,9 +455,9 @@ EOF
 			for WEBAPP in $(runcmd list-stale-webapps)
 			do
 				echo "$WEBAPP"
-				echo "	  .war modified $(stat -c %y webapps/${WEBAPP}.war)"
-				echo "	folder modified $(stat -c %y webapps/${WEBAPP}))"
-				touch webapps/${WEBAPP}.war
+				echo "	  .war modified $(stat -c %y "webapps/${WEBAPP}.war")"
+				echo "	folder modified $(stat -c %y "webapps/${WEBAPP}"))"
+				touch "webapps/${WEBAPP}.war"
 			done
 		;;
 		list-stale-webapps)
@@ -483,4 +483,4 @@ EOF
 	esac
 }
 
-runcmd $DOMAIN_COMMAND
+runcmd "$DOMAIN_COMMAND"

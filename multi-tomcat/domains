@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 # The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
@@ -38,7 +38,7 @@ function run_as_tomcat() {
 }
 
 # Set the launcher root
-LAUNCHER_ROOT=$(cd "$(dirname "$0")" ; cd .. ; pwd)
+LAUNCHER_ROOT=$(cd "$(dirname "$0")"/../ ; pwd)
 DIST_FOLDER="$LAUNCHER_ROOT/distribution"
 
 if [ ! -e "$LAUNCHER_ROOT/conf/user" ] ; then
@@ -132,12 +132,12 @@ if [ ! -e "$LAUNCHER_ROOT/shared" ] ; then
 		exit 100
 	fi
 	
-	run_as_tomcat mkdir $LAUNCHER_ROOT/shared || die_with "Failed to create shared folder!"
-	run_as_tomcat cp -r $DIST_FOLDER/lib $LAUNCHER_ROOT/shared/lib
-	run_as_tomcat cp -r $DIST_FOLDER/bin $LAUNCHER_ROOT/shared/bin
-	run_as_tomcat mkdir $LAUNCHER_ROOT/shared/endorsed
+	run_as_tomcat mkdir "$LAUNCHER_ROOT/shared" || die_with "Failed to create shared folder!"
+	run_as_tomcat cp -r "$DIST_FOLDER/lib" "$LAUNCHER_ROOT/shared/lib"
+	run_as_tomcat cp -r "$DIST_FOLDER/bin" "$LAUNCHER_ROOT/shared/bin"
+	run_as_tomcat mkdir "$LAUNCHER_ROOT/shared/endorsed"
 	
-	run_as_tomcat rm $LAUNCHER_ROOT/shared/bin/*.bat
+	run_as_tomcat rm "$LAUNCHER_ROOT"/shared/bin/*.bat
 fi
 
 
@@ -181,14 +181,14 @@ function domain_create() {
 
 	DOMAIN_FOLDER=$LAUNCHER_ROOT/$DOMAIN_NAME
 
-	run_as_tomcat mkdir $DOMAIN_FOLDER || die_with "Failed to create domain folder: $DOMAIN_FOLDER"
-	run_as_tomcat cp -r $DIST_FOLDER/lib $DOMAIN_FOLDER/lib
-	run_as_tomcat cp -r $DIST_FOLDER/conf $DOMAIN_FOLDER/conf
-	run_as_tomcat mkdir $DOMAIN_FOLDER/bin
-	run_as_tomcat mkdir $DOMAIN_FOLDER/webapps
-	run_as_tomcat mkdir $DOMAIN_FOLDER/logs
-	run_as_tomcat mkdir $DOMAIN_FOLDER/temp
-	run_as_tomcat mkdir $DOMAIN_FOLDER/work
+	run_as_tomcat mkdir "$DOMAIN_FOLDER" || die_with "Failed to create domain folder: $DOMAIN_FOLDER"
+	run_as_tomcat cp -r "$DIST_FOLDER/lib" "$DOMAIN_FOLDER/lib"
+	run_as_tomcat cp -r "$DIST_FOLDER/conf" "$DOMAIN_FOLDER/conf"
+	run_as_tomcat mkdir "$DOMAIN_FOLDER/bin"
+	run_as_tomcat mkdir "$DOMAIN_FOLDER/webapps"
+	run_as_tomcat mkdir "$DOMAIN_FOLDER/logs"
+	run_as_tomcat mkdir "$DOMAIN_FOLDER/temp"
+	run_as_tomcat mkdir "$DOMAIN_FOLDER/work"
 
 	# Add a special file to indicate this is a tomcat domain
 	run_as_tomcat dd status=none "of=$DOMAIN_FOLDER/DOMAIN.txt" >/dev/null <<EOF
@@ -197,13 +197,13 @@ Please refer to the documentation in the parent directory.
 EOF
 
 	# Remove the shutdown port and command (use signals instead)
-	run_as_tomcat perl -pi -e 's|port=".*?" shutdown=".*?"|port="-1" shutdown="SHUTDOWN"|' $DOMAIN_FOLDER/conf/server.xml
+	run_as_tomcat perl -pi -e 's|port=".*?" shutdown=".*?"|port="-1" shutdown="SHUTDOWN"|' "$DOMAIN_FOLDER/conf/server.xml"
 
 	# Remove the AJP connector
-	run_as_tomcat perl -pi -e 's|<Connector port=".*?" protocol="AJP/1.3" redirectPort="8443" />||' $DOMAIN_FOLDER/conf/server.xml
+	run_as_tomcat perl -pi -e 's|<Connector port=".*?" protocol="AJP/1.3" redirectPort="8443" />||' "$DOMAIN_FOLDER/conf/server.xml"
 
 	# Change the HTTP port
-	run_as_tomcat perl -pi -e "s|Connector port=\"8080\" |Connector port=\"${DOMAIN_PORT}\" |" $DOMAIN_FOLDER/conf/server.xml
+	run_as_tomcat perl -pi -e "s|Connector port=\"8080\" |Connector port=\"${DOMAIN_PORT}\" |" "$DOMAIN_FOLDER/conf/server.xml"
 }
 
 # Takes a comma- or space-separated list of aliases, emits a whitespace-separated list of domains (or dies with an error if invalid names were specified)
@@ -222,22 +222,22 @@ function resolve_aliases_raw() {
 			# Don't print anything
 		;;
 		online|running|started)
-			for DOMAIN_NAME in $(runcmd list)
+			for DOM in $(runcmd list)
 			do
-				local DOMAIN_PID=$($LAUNCHER_ROOT/bin/domain -n "$DOMAIN_NAME" -c pid)
+				local DOMAIN_PID=$("$LAUNCHER_ROOT/bin/domain" -n "$DOM" -c pid)
 				
 				if [ "$DOMAIN_PID" != "-1" ] ; then
-					echo $DOMAIN_NAME
+					echo "$DOM"
 				fi
 			done
 		;;
 		offline|stopped)
-			for DOMAIN_NAME in $(runcmd list)
+			for DOM in $(runcmd list)
 			do
-				local DOMAIN_PID=$($LAUNCHER_ROOT/bin/domain -n "$DOMAIN_NAME" -c pid)
+				local DOMAIN_PID=$("$LAUNCHER_ROOT/bin/domain" -n "$DOM" -c pid)
 				
 				if [ "$DOMAIN_PID" = "-1" ] ; then
-					echo $DOMAIN_NAME
+					echo "$DOM"
 				fi
 			done
 		;;
@@ -276,13 +276,13 @@ function domain_action() {
 
 	case "$action" in
 		log|tclog)
-			cd $LAUNCHER_ROOT
+			cd "$LAUNCHER_ROOT" || die_with "Unable to switch to tomcat root"
 			
 			# Special-case: tail multiple log files simultaneously
 			LOG_FILES="$(resolve_aliases "$DOMAIN_NAMES" | perl -pe 's|\n|,|g' | perl -pe 's|,|/logs/catalina.out |g')"
 			
 			if [ -n "$LOG_FILES" ] ; then
-				exec tail -f $LOG_FILES "$@"
+				exec tail -f "$LOG_FILES" "$@"
 			else
 				die_with "No domains matched, no logs to tail"
 			fi
@@ -291,23 +291,23 @@ function domain_action() {
 		*)
 			for DOMAIN_NAME in $(resolve_aliases "$DOMAIN_NAMES")
 			do
-				printf "$action $DOMAIN_NAME: "
+				echo -n "$action $DOMAIN_NAME: "
 
 				# If systemd mode is enabled and we're not inside systemd unit file, call out to systemctl for status/start/stop
-				if [[ "$IN_SYSTEMD_UNIT_CTX" != "1" && -e $LAUNCHER_ROOT/conf/systemd ]] ; then
+				if [[ "$IN_SYSTEMD_UNIT_CTX" != "1" && -e "$LAUNCHER_ROOT/conf/systemd" ]] ; then
 					case "$action" in
 						status)
 							systemctl status "tomcat@${DOMAIN_NAME}"
 							continue
 							;;
-						start|stop|kill|restart|status)
+						start|stop|kill|restart)
 							sudo systemctl "$action" "tomcat@${DOMAIN_NAME}"
 							continue
 							;;
 					esac
 				fi
 
-				run_as_tomcat $LAUNCHER_ROOT/bin/domain -n "$DOMAIN_NAME" -c "$action" "$@"
+				run_as_tomcat "$LAUNCHER_ROOT/bin/domain" -n "$DOMAIN_NAME" -c "$action" "$@"
 			done
 
 			;;
@@ -326,7 +326,6 @@ function runcmd() {
 		;;
 		'')
 			die_with_usage "Expected: command"
-			exit 1
 		;;
 		add|create)
 			DOMAIN_NAME="$1"
@@ -334,7 +333,7 @@ function runcmd() {
 		
 			domain_create -n "$DOMAIN_NAME" "$@"
 
-			if [-e $LAUNCHER_ROOT/conf/systemd ] ; then
+			if [ -e "$LAUNCHER_ROOT/conf/systemd" ] ; then
 				sudo systemctl enable "tomcat@${DOMAIN_NAME}"
 			fi
 		;;
@@ -412,11 +411,11 @@ EOF
 		;;
 		list)
 			if [ -z "$1" ] ; then
-				for f in $LAUNCHER_ROOT/*
+				for f in "$LAUNCHER_ROOT"/*
 				do
 					if [ -d "$f" ] ; then
 						if [ -e "${f}/DOMAIN.txt" ] ; then
-							echo $(basename "$f")
+							basename "$f"
 						fi
 					fi
 				done

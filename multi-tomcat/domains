@@ -281,10 +281,11 @@ function domain_action() {
 			cd "$LAUNCHER_ROOT" || die_with "Unable to switch to tomcat root"
 			
 			# Special-case: tail multiple log files simultaneously
-			LOG_FILES="$(resolve_aliases "$DOMAIN_NAMES" | perl -pe 's|\n|,|g' | perl -pe 's|,|/logs/catalina.out|g')"
+			LOG_FILES="$(resolve_aliases "$DOMAIN_NAMES" | perl -pe 's/ /_/g' | perl -pe 's|\n|/logs/catalina.out |g' | perl -pe 's/ $//g')"
 			
 			if [ -n "$LOG_FILES" ] ; then
-				exec tail -f "$LOG_FILES" "$@"
+				# N.B. do not quote this, we need to allow space-separated values to be expanded to multiple params here
+				exec tail -f $LOG_FILES "$@"
 			else
 				die_with "No domains matched, no logs to tail"
 			fi

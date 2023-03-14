@@ -346,6 +346,23 @@ function runcmd() {
 				sudo systemctl enable "tomcat@${DOMAIN_NAME}"
 			fi
 		;;
+		install-cron)
+			if [ ! -e /etc/cron.d ] ; then
+				die_with "/etc/cron.d not found!"
+			fi
+			
+			echo "Setting up /etc/cron.d/tomcat entry as root..."
+			
+			sudo dd status=none "of=/etc/cron.d/tomcat" <<EOF
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+MAILTO=
+# m	h	dom	mon	dow	user	command
+55	23	*	*	*	${CATALINA_USER}	"${LAUNCHER_ROOT}/bin/nightly.sh" "by nightly /etc/cron.d job"
+0	3	7	*	*	${CATALINA_USER}	"${LAUNCHER_ROOT}/bin/weekly.sh" "by weekly /etc/cron.d job"
+30	23	*	*	*	root	chown -R "${CATALINA_USER}:${CATALINA_USER}" "$LAUNCHER_ROOT"
+EOF
+		;;
 		enable-systemd)
 			# Make sure domains are not running
 			for RUNNING_DOMAIN in $(runcmd list running)
@@ -404,15 +421,9 @@ EOF
 			echo 1 | run_as_tomcat dd status=none "of=$LAUNCHER_ROOT/conf/systemd"
 		;;
 		install)
-			echo "Setting up /etc/profile.d/tomcat.sh ..."
+			echo "Linking domains script into /usr/bin..."
 			
-			sudo dd status=none of=/etc/profile.d/tomcat.sh <<EOF
-# Tomcat profile.d to allow use of "domains" script
-
-alias domains=/opt/tomcat/bin/domains
-EOF
-
-			return
+			ln -s "${LAUNCHER_ROOT}/bin/domains" /usr/bin/domains
 		;;
 		startlog)
 			domain_action "start" "$@"

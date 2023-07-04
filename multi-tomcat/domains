@@ -182,7 +182,7 @@ function domain_create() {
 	DOMAIN_FOLDER=$LAUNCHER_ROOT/$DOMAIN_NAME
 
 	run_as_tomcat mkdir "$DOMAIN_FOLDER" || die_with "Failed to create domain folder: $DOMAIN_FOLDER"
-	run_as_tomcat cp -r "$DIST_FOLDER/lib" "$DOMAIN_FOLDER/lib"
+	run_as_tomcat ln -rs "$DIST_FOLDER/lib" "$DOMAIN_FOLDER/lib"
 	run_as_tomcat cp -r "$DIST_FOLDER/conf" "$DOMAIN_FOLDER/conf"
 	run_as_tomcat mkdir "$DOMAIN_FOLDER/bin"
 	run_as_tomcat mkdir "$DOMAIN_FOLDER/webapps"
@@ -345,6 +345,29 @@ function runcmd() {
 			if [ -e "$LAUNCHER_ROOT/conf/systemd" ] ; then
 				sudo systemctl enable "tomcat@${DOMAIN_NAME}"
 			fi
+		;;
+		relink)
+	
+			# Intended to be called when shared libraries in shared/ext are changed
+			
+			# Remove all symlinks in distribution/lib
+			run_as_tomcat find "${DIST_FOLDER}/lib" -type l -delete
+			
+			# Relink all of shared/ext
+			if [ -e "$LAUNCHER_ROOT/shared/ext" ] ; then
+				run_as_tomcat ln -rs -- "$LAUNCHER_ROOT/shared/ext"/*.jar "$DIST_FOLDER/lib/"
+			fi
+			
+			for DOMAIN_NAME in $(runcmd list)
+			do
+				if [ -e "$LAUNCHER_ROOT/${DOMAIN_NAME}/DOMAIN.txt" ] ; then
+					run_as_tomcat find "$LAUNCHER_ROOT/${DOMAIN_NAME}/lib" -type l -delete
+					run_as_tomcat ln -rs -- "$DIST_FOLDER/lib/"* "$LAUNCHER_ROOT/${DOMAIN_NAME}/lib/"
+				fi
+			done
+			
+			
+			echo 
 		;;
 		install-cron)
 			if [ ! -e /etc/cron.d ] ; then

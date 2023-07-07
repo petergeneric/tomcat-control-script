@@ -145,6 +145,27 @@ export CATALINA_HOME="$LAUNCHER_ROOT/shared"
 export CATALINA_BASE="$DOMAIN_FOLDER"
 export CATALINA_PID="$DOMAIN_FOLDER/.pid"
 
+if [ -e "$LAUNCHER_ROOT/conf/rotatelog" ] ; then
+	if [ -e "$LAUNCHER_ROOT/bin/rotatelog" ] ; then
+		case "$(cat "$LAUNCHER_ROOT/conf/rotatelog")" in
+			yes|true|1)
+				export CATALINA_OUT="$DOMAIN_FOLDER/logs/.catalina.out.pipe"
+				export CATALINA_OUT_CMD="$LAUNCHER_ROOT/bin/rotatelog <$CATALINA_OUT --directory ${DOMAIN_FOLDER}/logs --filename application --compress"
+
+				echo "Enabling CATALINA_OUT_CMD=$CATALINA_OUT_CMD"
+			;;
+			no|false|0)
+				echo "Using default tomcat catalina.out profile"
+				# Let tomcat write to catalina.out itself
+			;;
+			*)
+				die_with "Unknown value in conf/rotatelog: $(cat "$LAUNCHER_ROOT/conf/rotatelog")"
+			;;
+		esac
+	fi
+fi
+
+
 get_pid() {
 	if [ -e "$CATALINA_PID" ] ; then
 		which pgrep 2>/dev/null >/dev/null

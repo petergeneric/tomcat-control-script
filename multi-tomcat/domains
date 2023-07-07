@@ -38,7 +38,7 @@ function run_as_tomcat() {
 }
 
 # Set the launcher root
-LAUNCHER_ROOT=$(cd "$(dirname "$0")"/../ ; pwd)
+LAUNCHER_ROOT=$(cd "$(dirname "$(readlink -f "$0")")"/../ ; pwd)
 DIST_FOLDER="$LAUNCHER_ROOT/distribution"
 
 if [ ! -e "$LAUNCHER_ROOT/conf/user" ] ; then

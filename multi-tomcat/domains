@@ -357,6 +357,15 @@ function runcmd() {
 			if [ -e "$LAUNCHER_ROOT/shared/ext" ] ; then
 				run_as_tomcat ln -rs -- "$LAUNCHER_ROOT/shared/ext"/*.jar "$DIST_FOLDER/lib/"
 			fi
+
+			if [ -e "$LAUNCHER_ROOT/setenv.sh" ] ; then
+				run_as_tomcat rm -f $LAUNCHER_ROOT/distribution/bin/setenv.sh 2>/dev/null
+				run_as_tomcat ln -rs -- "$LAUNCHER_ROOT/setenv.sh" "$LAUNCHER_ROOT/distribution/bin/setenv.sh"
+			elif [ -e "$LAUNCHER_ROOT/bin/setenv.sh" ] ; then
+				run_as_tomcat rm -f $LAUNCHER_ROOT/distribution/bin/setenv.sh 2>/dev/null
+				run_as_tomcat ln -rs -- "$LAUNCHER_ROOT/bin/setenv.sh" "$LAUNCHER_ROOT/distribution/bin/setenv.sh"
+			fi
+
 			
 			for DOMAIN_NAME in $(runcmd list)
 			do

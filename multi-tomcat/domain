@@ -175,22 +175,27 @@ get_pid() {
 			PGREP_RESULT="$(pgrep -F "$CATALINA_PID" java -u "$CATALINA_USER")"
 
 			if [ "$?" = "0" ] ; then
-				which pwdx 2>/dev/null >/dev/null
-
-				# If pwds is available and we are the tomcat user...
-				if [ "$?" = "0" ] && [ "$(whoami)" = "$CATALINA_USER" ] ; then
-					#  pwdx is present, check that the working directory of the process is what we expect
-					pwdx "$PGREP_RESULT" | grep "$DOMAIN_FOLDER" >/dev/null 2>/dev/null
-
-					if [ "$?" = "0" ] ; then
-						# pwdx gave the working directory we expected, this process id looks like it's right
-						echo "$PGREP_RESULT"
+				if [ ! -e "$LAUNCHER_ROOT/conf/systemd" ] ; then
+					which pwdx 2>/dev/null >/dev/null
+	
+					# If pwds is available and we are the tomcat user...
+					if [ "$?" = "0" ] && [ "$(whoami)" = "$CATALINA_USER" ] ; then
+						#  pwdx is present, check that the working directory of the process is what we expect
+						pwdx "$PGREP_RESULT" | grep "$DOMAIN_FOLDER" >/dev/null 2>/dev/null
+	
+						if [ "$?" = "0" ] ; then
+							# pwdx gave the working directory we expected, this process id looks like it's right
+							echo "$PGREP_RESULT"
+						else
+							# pwdx gave a different working directory than we expected
+							echo "-1"
+						fi
 					else
-						# pwdx gave a different working directory than we expected
-						echo "-1"
+						# No pwdx, should we fall back on checking where /proc/<pid>/cwd points to (assuming it exists)?
+						echo "$PGREP_RESULT"
 					fi
 				else
-					# No pwdx, should we fall back on checking where /proc/<pid>/cwd points to (assuming it exists)?
+					# Running under systemd, pwdx as tomcat will not have permission
 					echo "$PGREP_RESULT"
 				fi
 			else

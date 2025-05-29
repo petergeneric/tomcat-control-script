@@ -56,6 +56,32 @@ if [ -e "$LAUNCHER_ROOT/conf/name" ] ; then
 elif [ -e "$LAUNCHER_ROOT/conf/remotes" ] ; then
 	# An install that manages other systems must have a default name if one is not already set
 	export LAUNCHER_NAME="domparent"
+elif [ -n "$MANAGED_BY_DOM" ] ; then
+	# We are managed by somebody else. Default to using their name for us
+
+	# Get absolute path of our launcher root
+	REAL_LAUNCHER_ROOT=$(readlink -f "$LAUNCHER_ROOT")
+
+	# Look through all remotes of our manager to find ourselves
+	for remote in "$MANAGED_BY_DOM/conf/remotes"/*/ ; do
+		if [ -d "$remote" ] ; then
+			REMOTE_PATH=$(readlink -f "$remote")
+			if [ "$REMOTE_PATH" = "$REAL_LAUNCHER_ROOT" ] ; then
+				export LAUNCHER_NAME=$(basename "$remote")
+
+				# save name to simplify future uses
+				echo -n "$LAUNCHER_NAME" > "$LAUNCHER_ROOT/conf/name"
+
+				break
+			fi
+		fi
+	done
+
+	if [ -z "$LAUNCHER_NAME" ] ; then
+		# Could not work out a launcher name, so use 'unknown' for now
+		LAUNCHER_NAME="unknown"
+	fi
+	
 fi
 
 export CATALINA_USER=$(cat "$LAUNCHER_ROOT/conf/user")
@@ -163,7 +189,7 @@ function domain_create() {
 			-n|--name)
 				DOMAIN_NAME="$1"
 				shift
-			
+
 				case $DOMAIN_NAME in
 					distribution|shared|bin|lib|endorsed|conf|logs|temp|work|all)
 						die_with "Illegal domain name: $DOMAIN_NAME is reserved"
@@ -608,7 +634,11 @@ function runcmd() {
 		name)
 			local NAME="$1"
 
-			echo -n "$NAME" > $LAUNCHER_ROOT/conf/name || die_with "Unable to write name to $LAUNCHER_ROOT/conf/name"
+				if [ -z "$NAME" ] ; then
+					echo "Installation Name is: $LAUNCHER_NAME"
+				else
+					echo -n "$NAME" > $LAUNCHER_ROOT/conf/name || die_with "Unable to write name to $LAUNCHER_ROOT/conf/name"
+				fi
 		;;
 		manage)
 			local REMOTE_LAUNCHER_ROOT="$1"

@@ -287,17 +287,22 @@ function domain_action() {
 	case "$action" in
 		log|tclog)
 			cd "$LAUNCHER_ROOT" || die_with "Unable to switch to tomcat root"
-			
-			# Special-case: tail multiple log files simultaneously
-			LOG_FILES="$(resolve_aliases "$DOMAIN_NAMES" | perl -pe 's/ /_/g' | perl -pe 's|\n|/logs/catalina.out |g' | perl -pe 's/ $//g')"
-			
-			if [ -n "$LOG_FILES" ] ; then
-				# N.B. do not quote this, we need to allow space-separated values to be expanded to multiple params here
-				exec tail -f $LOG_FILES "$@"
-			else
-				die_with "No domains matched, no logs to tail"
-			fi
 
+			local log_files=()
+			for dom in $(resolve_aliases "$DOMAIN_NAMES")
+			do
+				# If log file exists, include it in the list of files we will tail
+				local logfile="$(domain_folder "$dom")/logs/catalina.out"
+				if [ -f "$logfile" ] ; then
+					log_files+=("$logfile")
+				fi
+			done
+
+			if [ ${#log_files[@]} -eq 0 ]; then
+				die_with "No domains matched, no logs to tail!"
+      else
+				exec tail -f "${log_files[@]}" "$@"
+      fi
 		;;
 		folder)
 			for DOMAIN_NAME in $(resolve_aliases "$DOMAIN_NAMES")

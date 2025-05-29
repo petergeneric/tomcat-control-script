@@ -48,7 +48,14 @@ elif [ ! -e "$LAUNCHER_ROOT/conf/java" ] ; then
 fi
 
 if [ -e "$LAUNCHER_ROOT/conf/managed-by" ] ; then
-	export MANAGED_BY_DOM="$(cat "$LAUNCHER_ROOT/conf/managed-by")"
+	MANAGED_BY_DOM="$(cat "$LAUNCHER_ROOT/conf/managed-by")"
+fi
+
+if [ -e "$LAUNCHER_ROOT/conf/name" ] ; then
+	export LAUNCHER_NAME=$(cat "$LAUNCHER_ROOT/conf/name")
+elif [ -e "$LAUNCHER_ROOT/conf/remotes" ] ; then
+	# An install that manages other systems must have a default name if one is not already set
+	export LAUNCHER_NAME="domparent"
 fi
 
 export CATALINA_USER=$(cat "$LAUNCHER_ROOT/conf/user")
@@ -298,7 +305,7 @@ function resolve_aliases_raw() {
 					fi
 				done
 			else
-				echo "Not a local/remote domain name, domain attribute, or valid alias/prefix: $DOMAIN_NAME" >&2
+				echo "Not a local/remote domain name, domain attribute, or valid alias: $DOMAIN_NAME" >&2
 				exit 2
 			fi
 		;;
@@ -390,17 +397,12 @@ function domain_action() {
 }
 
 function domain_list() {
-	# List all local domains
-	for f in "$LAUNCHER_ROOT"/*
-	do
-		if [ -d "$f" ] ; then
-			if [ -e "${f}/DOMAIN.txt" ] ; then
-				basename "$f"
-			fi
-		fi
-	done
+	local f
+	local remote
+	local remote_name
+	local domain_name
 
-	# Remote domains
+	# Special-case installation that manages multiple multi-tomcat installs
 	if [ -e "${LAUNCHER_ROOT}/conf/remotes" ] ; then
 		for remote in "$LAUNCHER_ROOT/conf/remotes"/*/ ; do
 			if [ -d "$remote" ] ; then
@@ -411,6 +413,31 @@ function domain_list() {
 						echo "${remote_name}:${domain_name}"
 					fi
 				done
+			fi
+		done
+
+		for f in "$LAUNCHER_ROOT"/*
+		do
+			if [ -d "$f" ] ; then
+				if [ -e "${f}/DOMAIN.txt" ] ; then
+					if [ -z "$LAUNCHER_NAME" ] ; then
+						die_with "Core manager has domains but no conf/name is set!"
+					fi
+
+					domain_name="$(basename "$f")"
+					echo "${LAUNCHER_NAME}:${domain_name}"
+				fi
+			fi
+		done
+
+	else
+		# local-only install. Emit bare names of all domains
+		for f in "$LAUNCHER_ROOT"/*
+		do
+			if [ -d "$f" ] ; then
+				if [ -e "${f}/DOMAIN.txt" ] ; then
+					basename "$f"
+				fi
 			fi
 		done
 	fi
@@ -430,18 +457,24 @@ function domain_folder() {
     local dom="$1"
     shift
 
-    if [[ "$dom" == *":"* ]]; then
-        local remotename="${dom%%:*}"
-        local domainname="${dom#*:}"
-        local folder="${LAUNCHER_ROOT}/conf/remotes/${remotename}/${domainname}"
+local folder
+	if [[ "$dom" == *":"* ]]; then
+		local remotename="${dom%%:*}"
+		local domainname="${dom#*:}"
 
-        # Resolve symlink
-        folder=$(readlink -f "$folder")
-    else
-        local folder="${LAUNCHER_ROOT}/${dom}"
-    fi
+		if [ "$remotename" = "$LAUNCHER_NAME" ] ; then
+			folder="${LAUNCHER_ROOT}/${domainname}"
+		else
+			folder="${LAUNCHER_ROOT}/conf/remotes/${remotename}/${domainname}"
 
-    echo -n "$folder"
+			# Resolve symlink
+			folder=$(readlink -f "$folder")
+		fi
+	else
+		folder="${LAUNCHER_ROOT}/${dom}"
+	fi
+
+	echo -n "$folder"
 }
 
 #######################################
@@ -561,7 +594,7 @@ function runcmd() {
 			fi
 
 			
-			for DOMAIN_NAME in $(runcmd list)
+			for DOMAIN_NAME in $(runcmd list local)
 			do
 				if [ -e "$LAUNCHER_ROOT/${DOMAIN_NAME}/DOMAIN.txt" ] ; then
 					run_as_tomcat find "$LAUNCHER_ROOT/${DOMAIN_NAME}/lib" -type l -delete
@@ -572,9 +605,26 @@ function runcmd() {
 			
 			echo 
 		;;
+		name)
+			local NAME="$1"
+
+			echo -n "$NAME" > $LAUNCHER_ROOT/conf/name || die_with "Unable to write name to $LAUNCHER_ROOT/conf/name"
+		;;
 		manage)
 			local REMOTE_LAUNCHER_ROOT="$1"
 			local ALIAS="$2"
+
+			echo "Attempting to register this instance as manager of $REMOTE_LAUNCHER_ROOT (with alias $ALIAS)..."
+
+			if [ -n "$MANAGED_BY_DOM" ] ; then
+				die_with "This tomcat install is managed by $MANAGED_BY_DOM and cannot manage other installs!"
+			fi
+
+			# If alias is not specified, pick it up from the root
+			if [ -z "$ALIAS" ] && [ -f "$REMOTE_LAUNCHER_ROOT/conf/name" ] ; then
+				ALIAS="$(cat "$REMOTE_LAUNCHER_ROOT/conf/name")"
+				echo " - Alias not specified, using name from remote install: '$ALIAS'"
+			fi
 
 			if [ -z "$REMOTE_LAUNCHER_ROOT" ] || [ -z "$ALIAS" ] ; then
 				die_with "manage usage: (remote root) (local alias)"
@@ -607,7 +657,7 @@ function runcmd() {
 
 
 			if [ -n "$MANAGED_BY_DOM" ] ; then
-				die_with "This tomcat domain is managed by $MANAGED_BY_DOM, which manages global cron!"
+				die_with "This tomcat install is managed by $MANAGED_BY_DOM, which manages global cron!"
 			fi
 			
 			echo "Setting up /etc/cron.d/tomcat entry as root..."
@@ -644,7 +694,7 @@ EOF
 		;;
 		setup-systemd|enable-systemd|install-systemd)
 			if [ -n "$MANAGED_BY_DOM" ] ; then
-				die_with "This tomcat domain is managed by $MANAGED_BY_DOM, which manages systemd!"
+				die_with "This tomcat install is managed by $MANAGED_BY_DOM, which manages systemd!"
 			fi
 
 			# Make sure domains are not running

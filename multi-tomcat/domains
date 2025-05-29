@@ -216,42 +216,50 @@ function resolve_aliases_raw() {
 		case $DOMAIN_NAME in
 		all)
 			# Emit all domains
-			runcmd list
+			domain_list
 		;;
 		none)
 			# Don't print anything
 		;;
 		online|running|started)
-			for DOM in $(runcmd list)
+			for DOM in $(domain_list)
 			do
-				local DOMAIN_PID=$("$LAUNCHER_ROOT/bin/domain" -n "$DOM" -c pid)
-				
-				if [ "$DOMAIN_PID" != "-1" ] ; then
+				is_dom_prop "$DOM" "running" && echo "$DOM"
+			done
+		;;
+		offline|stopped)
+			for DOM in $(domain_list)
+			do
+				is_dom_prop "$DOM" "not-running" && echo "$DOM"
+			done
+		;;
+		local)
+			for DOM in $(domain_list)
+			do
+				if [[ "$DOM" != *":"* ]]; then
 					echo "$DOM"
 				fi
 			done
 		;;
-		offline|stopped)
-			for DOM in $(runcmd list)
+		remote)
+			for DOM in $(domain_list)
 			do
-				local DOMAIN_PID=$("$LAUNCHER_ROOT/bin/domain" -n "$DOM" -c pid)
-				
-				if [ "$DOMAIN_PID" = "-1" ] ; then
+				if [[ "$DOM" = *":"* ]]; then
 					echo "$DOM"
 				fi
 			done
 		;;
 		*)
+		local folder="$(domain_folder "$DOMAIN_NAME")"
+
 			# Check that this is really a domain
 			# If it's not then it might be a user-defined alias
-			if [ -e "${LAUNCHER_ROOT}/${DOMAIN_NAME}/DOMAIN.txt" ] ; then
+			if [ -e "$folder/DOMAIN.txt" ] ; then
 				echo "$DOMAIN_NAME"
 			elif [ -f "${LAUNCHER_ROOT}/conf/alias/${DOMAIN_NAME}" ] ; then
 				resolve_aliases_raw "$(cat "${LAUNCHER_ROOT}/conf/alias/${DOMAIN_NAME}")"
-			elif [ -f "$(echo "${LAUNCHER_ROOT}/${DOMAIN_NAME}"*/DOMAIN.txt)" ] ; then
-				basename "$(dirname "${LAUNCHER_ROOT}/${DOMAIN_NAME}"*/DOMAIN.txt)"
 			else
-				echo "Not a domain name or valid alias/prefix: $DOMAIN_NAME" >&2
+				echo "Not a local/remote domain name, domain attribute, or valid alias/prefix: $DOMAIN_NAME" >&2
 				exit 2
 			fi
 		;;
@@ -316,13 +324,141 @@ function domain_action() {
 				fi
 
 				echo -n "$action $DOMAIN_NAME: "
-				run_as_tomcat "$LAUNCHER_ROOT/bin/domain" -n "$DOMAIN_NAME" -c "$action" "$@"
+				run_domain_script "$DOMAIN_NAME" -c "$action" "$@"
 			done
 
 			;;
 	esac
 }
 
+function domain_list() {
+	# List all local domains
+	for f in "$LAUNCHER_ROOT"/*
+	do
+		if [ -d "$f" ] ; then
+			if [ -e "${f}/DOMAIN.txt" ] ; then
+				basename "$f"
+			fi
+		fi
+	done
+
+	# Remote domains
+	if [ -e "${LAUNCHER_ROOT}/conf/remotes" ] ; then
+		for remote in "$LAUNCHER_ROOT/conf/remotes"/*/ ; do
+			if [ -d "$remote" ] ; then
+				remote_name=$(basename "$remote")
+				for domain in "$remote"/*/ ; do
+					if [ -e "${domain}/DOMAIN.txt" ] ; then
+						domain_name=$(basename "$domain")
+						echo "${remote_name}:${domain_name}"
+					fi
+				done
+			fi
+		done
+	fi
+}
+
+#######################################
+# Execute a command for a given tomcat domain
+#
+# Arguments:
+#   $1 - Name of the domain; will execute the appropriate domain control script (local to this install or remote)
+# Outputs:
+#   The folder for that domain
+# Returns:
+#   the exit code of the script
+#######################################
+function domain_folder() {
+    local dom="$1"
+    shift
+
+    if [[ "$dom" == *":"* ]]; then
+        local remotename="${dom%%:*}"
+        local domainname="${dom#*:}"
+        local folder="${LAUNCHER_ROOT}/conf/remotes/${remotename}/${domainname}"
+
+        # Resolve symlink
+        folder=$(readlink -f "$folder")
+    else
+        local folder="${LAUNCHER_ROOT}/${dom}"
+    fi
+
+    echo -n "$folder"
+}
+
+#######################################
+# Test a domain for a property. Returns 0 if it has that property, otherwise false
+#
+# Arguments:
+#   $1 - Name of the domain; supports remote:domainname as well as just plain domainname
+#   $2 - The property name. one of: running, not-running
+# Outputs:
+#   Nothing
+# Returns:
+#   0 if has that property, non-zero if does not have that property
+#######################################
+function is_dom_prop() {
+	local dom="$1"
+	local prop="$2"
+
+	case "$prop" in
+		running)
+			[ "$(run_domain_script "$dom" -c pid)" != "-1" ]
+			return $?
+			;;
+		not-running)
+			[ "$(run_domain_script "$dom" -c pid)" = "-1" ]
+			return $?
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+
+
+#######################################
+# Execute a command for a given tomcat domain
+#
+# Arguments:
+#   $1 - Name of the domain; will execute the appropriate domain control script (local to this install or remote)
+#   $2 - (and onwards) is the actual command to return
+# Outputs:
+#   Writes status messages to stdout
+# Returns:
+#   the exit code of the script
+#######################################
+function run_domain_script() {
+	local srcdom="$1"
+	local dom="$1"
+	shift
+
+	if [[ "$dom" == *":"* ]]; then
+		local domfolder="$(domain_folder "$dom")"
+
+		if [ -z "$domfolder" ] ; then
+			die_with "empty folder returned when resolving domain folder for: $dom"
+		elif [ ! -d "$domfolder" ] ; then
+			die_with "non-folder '${domfolder}' returned when resolving domain folder for: $dom"
+		fi
+
+		# Replace dom with the value after the colon
+		dom="${dom#*:}"
+
+		local script="$(readlink -f "${domfolder}/../bin/domain")"
+	else
+		local script="${LAUNCHER_ROOT}/bin/domain"
+	fi
+
+	if [ ! -f "$script" ] ; then
+		die_with "Could not find $srcdom script (was told: '${script}')! folder is: $domfolder"
+	fi
+
+
+	# N.B. this assumes that remotes all use the same user
+	run_as_tomcat "$script" -n "$dom" "$@"
+}
 
 function runcmd() {
 	command="$1"
@@ -463,14 +599,7 @@ EOF
 		;;
 		list)
 			if [ -z "$1" ] ; then
-				for f in "$LAUNCHER_ROOT"/*
-				do
-					if [ -d "$f" ] ; then
-						if [ -e "${f}/DOMAIN.txt" ] ; then
-							basename "$f"
-						fi
-					fi
-				done
+				domain_list
 			else
 				# Print all the matching domains
 				resolve_aliases "$1"

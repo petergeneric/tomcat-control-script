@@ -249,8 +249,26 @@ function resolve_aliases_raw() {
 				fi
 			done
 		;;
+		*:online|*:running|*:started)
+			local remotename="${DOMAIN_NAME%%:*}"
+			for DOM in $(domain_list)
+			do
+				if [[ "$DOM" = "${remotename}:"* ]]; then
+					is_dom_prop "$DOM" "running" && echo "$DOM"
+				fi
+			done
+		;;
+		*:offline|*:stopped)
+			local remotename="${DOMAIN_NAME%%:*}"
+			for DOM in $(domain_list)
+			do
+				if [[ "$DOM" = "${remotename}:"* ]]; then
+					is_dom_prop "$DOM" "not-running" && echo "$DOM"
+				fi
+			done
+		;;
 		*)
-		local folder="$(domain_folder "$DOMAIN_NAME")"
+			local folder="$(domain_folder "$DOMAIN_NAME")"
 
 			# Check that this is really a domain
 			# If it's not then it might be a user-defined alias
@@ -258,6 +276,13 @@ function resolve_aliases_raw() {
 				echo "$DOMAIN_NAME"
 			elif [ -f "${LAUNCHER_ROOT}/conf/alias/${DOMAIN_NAME}" ] ; then
 				resolve_aliases_raw "$(cat "${LAUNCHER_ROOT}/conf/alias/${DOMAIN_NAME}")"
+			elif [ -d "${LAUNCHER_ROOT}/conf/remotes/${DOMAIN_NAME}" ] ; then
+				for DOM in $(domain_list)
+				do
+					if [[ "$DOM" = "${DOMAIN_NAME}:"* ]]; then
+						echo "$DOM"
+					fi
+				done
 			else
 				echo "Not a local/remote domain name, domain attribute, or valid alias/prefix: $DOMAIN_NAME" >&2
 				exit 2

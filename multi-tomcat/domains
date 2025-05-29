@@ -298,7 +298,15 @@ function domain_action() {
 				die_with "No domains matched, no logs to tail"
 			fi
 
-			;;
+		;;
+		folder)
+			for DOMAIN_NAME in $(resolve_aliases "$DOMAIN_NAMES")
+			do
+				echo -n "folder ${DOMAIN_NAME}: "
+				domain_folder "$DOMAIN_NAME"
+				echo
+			done
+		;;
 		*)
 			for DOMAIN_NAME in $(resolve_aliases "$DOMAIN_NAMES")
 			do

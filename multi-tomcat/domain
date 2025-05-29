@@ -143,7 +143,34 @@ fi
 export DOMAIN_FOLDER="$LAUNCHER_ROOT/$DOMAIN_NAME"
 export CATALINA_HOME="$LAUNCHER_ROOT/shared"
 export CATALINA_BASE="$DOMAIN_FOLDER"
-export CATALINA_PID="$DOMAIN_FOLDER/.pid"
+if [ -e "$LAUNCHER_ROOT/conf/managed-by" ] ; then
+	export MANAGED_BY_DOM="$(cat "$LAUNCHER_ROOT/conf/managed-by")"
+fi
+
+# Get the folder where we should place PIDs
+# Create the folder if it does not already exist
+function get_pid_folder() {
+	if [ -n "$MANAGED_BY_DOM" ] ; then
+		# Managed instance, pid should live with the manager
+		local PID_FOLDER="$MANAGED_BY_DOM/.pids"
+	else
+		# Unmanaged instance, pids live locally
+		local PID_FOLDER="$LAUNCHER_ROOT/.pids"
+	fi
+
+	# Create .pids/ folder if it does not already exist
+	if [ ! -d "$PID_FOLDER" ] ; then
+		mkdir "$PID_FOLDER" || die_with "Cannot mkdir: $PID_FOLDER"
+		if [ ! -d "$PID_FOLDER" ] ; then
+			die_with "pid folder does not exist after mkdir: $PID_FOLDER"
+		fi
+	fi
+
+	echo -n "$PID_FOLDER/.pids/$DOMAIN_NAME"
+}
+
+export CATALINA_PID="$(get_pid_folder)/$DOMAIN_NAME"
+
 
 if [ -e "$LAUNCHER_ROOT/conf/rotatelog" ] ; then
 	if [ -e "$LAUNCHER_ROOT/bin/rotatelog" ] ; then

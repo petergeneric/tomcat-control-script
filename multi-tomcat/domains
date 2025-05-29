@@ -47,6 +47,10 @@ elif [ ! -e "$LAUNCHER_ROOT/conf/java" ] ; then
 	die_with "No JVM configured in $LAUNCHER_ROOT/conf/java"
 fi
 
+if [ -e "$LAUNCHER_ROOT/conf/managed-by" ] ; then
+	export MANAGED_BY_DOM="$(cat "$LAUNCHER_ROOT/conf/managed-by")"
+fi
+
 export CATALINA_USER=$(cat "$LAUNCHER_ROOT/conf/user")
 export JAVA_HOME=$(cat "$LAUNCHER_ROOT/conf/java")
 
@@ -179,7 +183,7 @@ function domain_create() {
 		die_with_usage "Must supply domain port!"
 	fi
 
-	DOMAIN_FOLDER=$LAUNCHER_ROOT/$DOMAIN_NAME
+	DOMAIN_FOLDER="$LAUNCHER_ROOT/$DOMAIN_NAME"
 
 	run_as_tomcat mkdir "$DOMAIN_FOLDER" || die_with "Failed to create domain folder: $DOMAIN_FOLDER"
 	run_as_tomcat ln -rs "$DIST_FOLDER/lib" "$DOMAIN_FOLDER/lib"
@@ -210,6 +214,7 @@ EOF
 # The order in which domain names are echoed by this function is undefined, the caller should always sort (and bear in mind that this function may emit duplicates)
 function resolve_aliases_raw() {
 	local DOMAIN_NAME=""
+	local DOM
 	
 	for DOMAIN_NAME in $(echo "$@" | cut -d',' --output-delimiter ' ' -f1- | paste -s -d' ')
 	do
@@ -267,6 +272,15 @@ function resolve_aliases_raw() {
 				fi
 			done
 		;;
+		*:all)
+			local remotename="${DOMAIN_NAME%%:*}"
+			for DOM in $(domain_list)
+			do
+				if [[ "$DOM" = "${remotename}:"* ]]; then
+					echo "$DOM"
+				fi
+			done
+		;;
 		*)
 			local folder="$(domain_folder "$DOMAIN_NAME")"
 
@@ -308,6 +322,12 @@ function domain_action() {
 		DOMAIN_NAMES="all"
 	fi
 
+	# Decline anything but simple operations when managed by somebody else
+	if [ -n "$MANAGED_BY_DOM" ] ; then
+		if [ "$action" != "log" ] && [ "$action" != "tclog" ] ; then
+			die_with "This installation is managed by domains script in $MANAGED_BY_DOM - run there instead (N.B. you may need to use scoped domain names)"
+		fi
+	fi
 
 	case "$action" in
 		log|tclog)
@@ -552,9 +572,42 @@ function runcmd() {
 			
 			echo 
 		;;
-		install-cron)
+		manage)
+			local REMOTE_LAUNCHER_ROOT="$1"
+			local ALIAS="$2"
+
+			if [ -z "$REMOTE_LAUNCHER_ROOT" ] || [ -z "$ALIAS" ] ; then
+				die_with "manage usage: (remote root) (local alias)"
+			fi
+
+			if [ ! -f "$REMOTE_LAUNCHER_ROOT/bin/domain" ] ; then
+				die_with "manage: remote launcher root not found, or not a multi-domain tomcat install: $REMOTE_LAUNCHER_ROOT"
+			fi
+
+			local managed_by_file="$REMOTE_LAUNCHER_ROOT/conf/managed-by"
+			local alias_file="$LAUNCHER_ROOT/conf/remotes/${ALIAS}"
+
+			if [ -e "$alias_file" ] ; then
+				die_with "Remote name $ALIAS is aready in use! Pick another name. See conf/remotes/ for currently defined items"
+			fi
+
+			if [ -e "$managed_by_file" ] ; then
+				die_with "Remote '$REMOTE_LAUNCHER_ROOT' is already managed by '$(cat "$managed_by_file")'! Refusing to proceed"
+			else
+				echo -n "$LAUNCHER_ROOT" >"$managed_by_file" || die_with "Cannot record ourselves as manager! Tried to write $managed_by_file"
+
+				ln -s "$REMOTE_LAUNCHER_ROOT" "$alias_file"
+			fi
+
+		;;
+		setup-cron|enable-cron|install-cron)
 			if [ ! -e /etc/cron.d ] ; then
 				die_with "/etc/cron.d not found!"
+			fi
+
+
+			if [ -n "$MANAGED_BY_DOM" ] ; then
+				die_with "This tomcat domain is managed by $MANAGED_BY_DOM, which manages global cron!"
 			fi
 			
 			echo "Setting up /etc/cron.d/tomcat entry as root..."
@@ -568,13 +621,51 @@ MAILTO=
 0	3	7	*	*	${CATALINA_USER}	"${LAUNCHER_ROOT}/bin/weekly.sh" "by weekly /etc/cron.d job"
 30	23	*	*	*	root	chown -R "${CATALINA_USER}:${CATALINA_USER}" "$LAUNCHER_ROOT"
 EOF
+
+		if [ -d "$LAUNCHER_ROOT/conf/remotes" ] ; then
+			for remote in "$LAUNCHER_ROOT/conf/remotes"/*/ ; do
+				if [ -d "$remote" ] ; then
+					echo "Setting up /etc/cron.d/tomcat-${remotename} entry as root..."
+
+					local remotename="$(basename "$remote")"
+					local REMOTE_LAUNCHER_ROOT="$(readlink -f "$remote")"
+					sudo dd status=none "of=/etc/cron.d/tomcat-${remotename}" <<EOF
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+MAILTO=
+# m	h	dom	mon	dow	user	command
+55	23	*	*	*	${CATALINA_USER}	"${REMOTE_LAUNCHER_ROOT}/bin/nightly.sh" "by nightly /etc/cron.d job"
+0	3	7	*	*	${REMOTE_CATALINA_USER}	"${REMOTE_LAUNCHER_ROOT}/bin/weekly.sh" "by weekly /etc/cron.d job"
+30	23	*	*	*	root	chown -R "${CATALINA_USER}:${CATALINA_USER}" "$REMOTE_LAUNCHER_ROOT"
+EOF
+			fi
+			done
+		fi
 		;;
-		enable-systemd)
+		setup-systemd|enable-systemd|install-systemd)
+			if [ -n "$MANAGED_BY_DOM" ] ; then
+				die_with "This tomcat domain is managed by $MANAGED_BY_DOM, which manages systemd!"
+			fi
+
 			# Make sure domains are not running
 			for RUNNING_DOMAIN in $(runcmd list running)
 			do
 				runcmd kill "$RUNNING_DOMAIN"
 			done
+
+			# Make sure a .pids folder exists
+			if [ ! -e "${LAUNCHER_ROOT}/.pids" ] ; then
+				run_as_tomcat mkdir "${LAUNCHER_ROOT}/.pids"
+			fi
+
+			# Make sure that .pids/ is in .gitignore (if one is present)
+			if [ -f "${LAUNCHER_ROOT}/.gitignore" ]; then
+				if ! grep -q "^\.pids/$" "${LAUNCHER_ROOT}/.gitignore"; then
+					run_as_tomcat bash -c 'echo ".pids/" >> "${LAUNCHER_ROOT}/.gitignore"'
+				fi
+			else
+				run_as_tomcat bash -c 'echo ".pids/" > "${LAUNCHER_ROOT}/.gitignore"'
+			fi
 
 			SERVICE_SCRIPT="/etc/systemd/system/tomcat@.service"
 
@@ -602,8 +693,7 @@ Restart=on-failure
 ExecStart=${LAUNCHER_ROOT}/bin/domains start %i
 ExecStop=${LAUNCHER_ROOT}/bin/domains stop %i
 ExecReload=${LAUNCHER_ROOT}/bin/domains restart %i
-ExecReload=${LAUNCHER_ROOT}/bin/domains restart %i
-PIDFile=${LAUNCHER_ROOT}/%i/.pid
+PIDFile=${LAUNCHER_ROOT}/.pids/%i
 Environment=IN_SYSTEMD_UNIT_CTX=1
 
 User=${CATALINA_USER}
